@@ -19,13 +19,13 @@ STEP2_SELECT_GROUP = """Based on your analysis of this codebase, choose exactly 
 
 {cwe_groups}
 
-Reply with only the exact group name in quotes, e.g. "Input validation". No other text."""
+Reply with only a JSON object with "reasoning" (brief) and "group" (exact group name from the list above). Example: {{"reasoning": "...", "group": "Input validation"}}"""
 
 STEP3_SELECT_CWE_AND_PLAN = """You have chosen the CWE group for this codebase. Now:
 
 1. **Pick one specific CWE** from the list below that fits this codebase and would be realistic to introduce as a subtle bug.
 2. **Plan the injection**: Identify exact file(s) and function(s) where you will introduce the vulnerability. The bug should look like a plausible developer mistake (e.g. missing check, wrong bound, unsafe API use). It may span multiple functions/files (interprocedural) if that makes it more realistic. Do NOT remove or bypass existing security code in an obvious way.
-3. **Describe the change in 2–4 sentences**: What you will add, remove, or modify, and why it is exploitable.
+3. **Describe the change in 2-4 sentences**: What you will add, remove, or modify, and why it is exploitable.
 
 **CWEs in the selected group (CWE# → Description):**
 
@@ -42,13 +42,3 @@ STEP4_EXECUTE = """Implement the vulnerability injection you planned.
 - You may edit one or more files as needed.
 
 Apply the changes now using your file editing tools. When done, briefly confirm what you changed (file(s) and a one-line summary)."""
-
-
-def step2_prompt(cwe_groups_text: str) -> str:
-    """Return the step 2 prompt with CWE groups filled in."""
-    return STEP2_SELECT_GROUP.format(cwe_groups=cwe_groups_text)
-
-
-def step3_prompt(cwes_text: str) -> str:
-    """Return the step 3 prompt with the CWE list filled in."""
-    return STEP3_SELECT_CWE_AND_PLAN.format(cwes=cwes_text)

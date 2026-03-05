@@ -1,15 +1,17 @@
 import json
-import os
+import logging
 import subprocess
-import sys
 import warnings
-from typing import Optional
+from typing import Optional, Tuple
 
 DEFAULT_MODEL = "rchat/gpt-oss-120b"
-DEFAULT_OUTPUT_FILE = os.path.join(sys.path[0], "output.txt")
+
+logger = logging.getLogger(__name__)
 
 
-def get_latest_session_id(directory: Optional[str] = None) -> Optional[str]:
+def get_latest_session_id(
+    directory: Optional[str] = None
+) -> Optional[str]:
     """Return the most recently updated session id, or None if there are no sessions.
 
     Args:
@@ -80,24 +82,15 @@ def continue_opencode_session(
     session_id: str,
     model: str = DEFAULT_MODEL,
     directory: Optional[str] = None,
-    output_file: str = DEFAULT_OUTPUT_FILE,
-):
-    """Run opencode with the given prompt in an existing session.
-
-    Args:
-        prompt: Initial message or instruction to send.
-        session_id: Id of the session to continue.
-        model: Model to use (default: DEFAULT_MODEL).
-        directory: Working directory to run opencode in (passed as --dir). If None, default is used.
-        output_file: File to write output to (default: DEFAULT_OUTPUT_FILE).
-
-    Returns:
-        None (output is written to output.txt).
+    capture_output: bool = False,
+) -> Optional[str]:
+    """Run opencode with the given prompt in an existing session. Streams output to logging.
+    If capture_output is True, returns full stdout as str.
     """
     kwargs = {"session": session_id}
     if directory is not None:
         kwargs["dir"] = directory
-    return run_opencode(prompt, model=model, output_file=output_file, kwargs=kwargs)
+    return run_opencode(prompt, model=model, kwargs=kwargs, capture_output=capture_output)
 
 
 def initiate_opencode_session(
@@ -105,51 +98,42 @@ def initiate_opencode_session(
     title: str,
     model: str = DEFAULT_MODEL,
     directory: Optional[str] = None,
-    output_file: str = DEFAULT_OUTPUT_FILE,
-):
-    """Start a new opencode session with the given prompt and title.
-
-    Args:
-        prompt: Initial message or instruction to send.
-        title: Title for the new session.
-        model: Model to use (default: DEFAULT_MODEL).
-        directory: Working directory to run opencode in (passed as --dir). If None, default is used.
-        output_file: File to write output to (default: DEFAULT_OUTPUT_FILE).
-
-    Returns:
-        None (output is written to output.txt).
+    capture_output: bool = False,
+) -> Optional[str]:
+    """Start a new opencode session with the given prompt and title. Streams output to logging.
+    If capture_output is True, returns full stdout as str.
     """
     kwargs = {"title": title}
     if directory is not None:
         kwargs["dir"] = directory
-    return run_opencode(prompt, model=model, output_file=output_file, kwargs=kwargs)
+    return run_opencode(prompt, model=model, kwargs=kwargs, capture_output=capture_output)
 
 
 def run_opencode(
     prompt: str,
     model: str = DEFAULT_MODEL,
-    output_file: str = DEFAULT_OUTPUT_FILE,
     kwargs: dict = {},
-):
+    capture_output: bool = False,
+) -> Optional[str]:
     """Run opencode with the given prompt; optional kwargs become CLI flags (e.g. session, title).
-
-    Args:
-        prompt: Message or instruction to send.
-        model: Model to use (default: DEFAULT_MODEL).
-        output_file: File to write output to (default: DEFAULT_OUTPUT_FILE).
-        kwargs: Optional CLI options as key-value pairs (e.g. session, title).
-
-    Returns:
-        None (stdout/stderr are written to output.txt).
+    Streams stdout/stderr to logging. If capture_output is True, returns full stdout as str.
     """
     args = ['opencode', 'run', prompt, '-m', model]
     for key, value in kwargs.items():
         args.extend([f'--{key}', value])
-    with open(output_file, 'a') as f:
-        process = subprocess.Popen(
-            args,
-            text=True,
-            stdout=f,
-            stderr=f
-        )
-        process.wait()
+    cwd = kwargs.get("dir")
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=cwd,
+    )
+    lines: list[str] = []
+    if process.stdout:
+        for line in process.stdout:
+            logger.info(line.strip())
+            if capture_output:
+                lines.append(line)
+    process.wait()
+    return "\n".join(lines) if capture_output else None
