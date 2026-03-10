@@ -118,6 +118,16 @@ def run_opencode(
     """Run opencode with the given prompt; optional kwargs become CLI flags (e.g. session, title).
     Streams stdout/stderr to logging. If capture_output is True, returns full stdout as str.
     """
+    context = []
+    for key in ("session", "title", "dir"):
+        value = kwargs.get(key)
+        if value:
+            context.append(f"{key}={value}")
+    context_text = ", ".join(context) if context else "no extra context"
+    logger.info("--- opencode prompt start (model=%s, %s) ---", model, context_text)
+    logger.info(prompt)
+    logger.info("--- opencode prompt end ---")
+
     args = ['opencode', 'run', prompt, '-m', model]
     for key, value in kwargs.items():
         args.extend([f'--{key}', value])

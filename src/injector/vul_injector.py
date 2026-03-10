@@ -11,7 +11,7 @@ _src_root = Path(__file__).resolve().parent.parent
 if str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
 
-from injector.workflow import run
+from injector.agents_basic_injection_v1.workflow import run
 
 logging.basicConfig(
     level=logging.INFO,
