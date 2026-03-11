@@ -1,7 +1,6 @@
 """LangGraph workflow for vulnerability injection and exploit validation."""
 
 import logging
-import uuid
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, TypedDict
 
@@ -31,15 +30,12 @@ from .prompts import (
     STEP6_FIX_EXPLOIT,
     STEP6_EXPLOIT_NOT_REAL,
 )
-from utils import (
-    DEFAULT_MODEL,
-    build_codebase_snapshot,
-    continue_opencode_session,
-    get_session_id_by_name,
-    initiate_opencode_session,
-)
+from utils import AgentRunner, OpencodeRunner, build_codebase_snapshot
 
 logger = logging.getLogger(__name__)
+
+# Default model when none is provided (e.g. via CLI --model)
+DEFAULT_MODEL = "rchat/gpt-oss-120b"
 
 # Max retries when exploit run fails (fix script → run again loop)
 MAX_EXPLOIT_RETRIES = 5
@@ -48,7 +44,7 @@ MAX_EXPLOIT_RETRIES = 5
 # --- State ---
 
 class VulnInjectState(TypedDict, total=False):
-    session_title: str
+    runner: AgentRunner
     session_id: str
     directory: str
     model: str
@@ -79,25 +75,18 @@ def _raise_if_refusal(stdout: Optional[str]) -> None:
 # Step 1: Analyze the codebase
 def analyze_codebase(state: VulnInjectState) -> VulnInjectState:
     logger.info("1️⃣ Analyzing codebase")
-    
     directory = state["directory"]
     model = state.get("model") or DEFAULT_MODEL
-    title = f"vul-inject-{uuid.uuid4().hex[:12]}"
+    runner = state["runner"]
     codebase = build_codebase_snapshot(directory)
-
-    initiate_opencode_session(
-        STEP1_ANALYZE.format(codebase=codebase),
-        title=title,
+    start = runner.create_session(
+        first_message=STEP1_ANALYZE.format(codebase=codebase),
         model=model,
         directory=directory,
     )
-    session_id = get_session_id_by_name(title, directory=directory)
-    if not session_id:
-        raise RuntimeError(f"No session found for title {title!r}")
     return {
         **state,
-        "session_title": title,
-        "session_id": session_id,
+        "session_id": start.session_id,
         "model": model,
     }
 
@@ -105,9 +94,9 @@ def analyze_codebase(state: VulnInjectState) -> VulnInjectState:
 # Step 2: Generate project-specific threat model (what it does, what it trusts, where exposed)
 def threat_model(state: VulnInjectState) -> VulnInjectState:
     logger.info("2️⃣ Generating threat model")
-    continue_opencode_session(
-        STEP2_THREAT_MODEL,
+    state["runner"].continue_session(
         session_id=state["session_id"],
+        message=STEP2_THREAT_MODEL,
         model=state["model"],
         directory=state["directory"],
     )
@@ -128,9 +117,9 @@ def select_cwe_group(state: VulnInjectState) -> VulnInjectState:
         return {**state, "cwe_list": cwe_list}
 
     logger.info("3️⃣ Selecting CWE group")
-    stdout = continue_opencode_session(
-        STEP3_SELECT_GROUP.format(cwe_groups=_load_cwe_groups_text()),
+    stdout = state["runner"].continue_session(
         session_id=state["session_id"],
+        message=STEP3_SELECT_GROUP.format(cwe_groups=_load_cwe_groups_text()),
         model=state["model"],
         directory=state["directory"],
         capture_output=True,
@@ -146,9 +135,9 @@ def select_cwe_group(state: VulnInjectState) -> VulnInjectState:
 # Step 4: Select the CWE and plan the injection
 def select_cwe_and_plan(state: VulnInjectState) -> VulnInjectState:
     logger.info("4️⃣ Selecting CWE and planning injection")
-    continue_opencode_session(
-        STEP4_SELECT_CWE_AND_PLAN.format(cwes=_format_cwes(state["cwe_list"])),
+    state["runner"].continue_session(
         session_id=state["session_id"],
+        message=STEP4_SELECT_CWE_AND_PLAN.format(cwes=_format_cwes(state["cwe_list"])),
         model=state["model"],
         directory=state["directory"],
     )
@@ -158,9 +147,9 @@ def select_cwe_and_plan(state: VulnInjectState) -> VulnInjectState:
 # Step 5: Execute the injection
 def execute_injection(state: VulnInjectState) -> VulnInjectState:
     logger.info("5️⃣ Executing injection")
-    stdout = continue_opencode_session(
-        STEP5_EXECUTE,
+    stdout = state["runner"].continue_session(
         session_id=state["session_id"],
+        message=STEP5_EXECUTE,
         model=state["model"],
         directory=state["directory"],
         capture_output=True,
@@ -179,9 +168,9 @@ def generate_exploit_script(state: VulnInjectState) -> VulnInjectState:
         prompt = STEP6_EXPLOIT_NOT_REAL.format(attempt=next_attempt, feedback=feedback)
     else:
         prompt = STEP6_GENERATE_EXPLOIT.format(attempt=next_attempt, feedback=feedback)
-    stdout = continue_opencode_session(
-        prompt,
+    stdout = state["runner"].continue_session(
         session_id=state["session_id"],
+        message=prompt,
         model=state["model"],
         directory=state["directory"],
         capture_output=True,
@@ -195,9 +184,9 @@ def fix_exploit_script(state: VulnInjectState) -> VulnInjectState:
     attempts = state.get("exploit_attempts", 0)
     feedback = state.get("exploit_feedback") or "None."
     logger.info("6️⃣🅱️ bis Fixing exploit script (attempt %s)", attempts + 1)
-    stdout = continue_opencode_session(
-        STEP6_FIX_EXPLOIT.format(attempt=attempts + 1, feedback=feedback),
+    stdout = state["runner"].continue_session(
         session_id=state["session_id"],
+        message=STEP6_FIX_EXPLOIT.format(attempt=attempts + 1, feedback=feedback),
         model=state["model"],
         directory=state["directory"],
         capture_output=True,
@@ -353,6 +342,7 @@ def run(
     directory: str,
     model: Optional[str] = None,
     cwe_group: Optional[str] = None,
+    runner: Optional[AgentRunner] = None,
 ) -> VulnInjectState:
     """Run the vulnerability injection workflow on the given codebase directory.
     If cwe_group is not provided, the agent selects one (with RetryPolicy:
@@ -361,7 +351,10 @@ def run(
     Failed exploit runs loop back to regeneration with feedback (up to 5 runs).
     """
     app = build_graph()
-    initial: VulnInjectState = {"directory": str(Path(directory).resolve())}
+    initial: VulnInjectState = {
+        "directory": str(Path(directory).resolve()),
+        "runner": runner if runner is not None else OpencodeRunner(),
+    }
     if model:
         initial["model"] = model
     if cwe_group:

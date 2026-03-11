@@ -12,6 +12,7 @@ if str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
 
 from injector.agents_basic_injection_v1.workflow import run
+from utils import ClaudeAgentRunner, OpencodeRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,16 +23,24 @@ logging.basicConfig(
 def main() -> None:
     parser = argparse.ArgumentParser(description="LangGraph vulnerability injection workflow")
     parser.add_argument("directory", type=str, help="Target codebase directory")
-    parser.add_argument("--model", type=str, default=None, help="Opencode model (default from opencode_run)")
+    parser.add_argument("--model", type=str, default=None, help="Model (default depends on agent)")
     parser.add_argument(
         "--cwe-group",
         type=str,
         default=None,
         help="Optional CWE group name; if not set, agent selects one (with retry up to 3 times)",
     )
+    parser.add_argument(
+        "--agent",
+        type=str,
+        choices=("opencode", "claude"),
+        default="opencode",
+        help="Agent backend (default: opencode)",
+    )
     args = parser.parse_args()
+    runner = ClaudeAgentRunner() if args.agent == "claude" else OpencodeRunner()
     try:
-        result = run(args.directory, model=args.model, cwe_group=args.cwe_group)
+        result = run(args.directory, model=args.model, cwe_group=args.cwe_group, runner=runner)
     except ValueError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
