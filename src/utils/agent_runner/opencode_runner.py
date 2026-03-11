@@ -92,7 +92,8 @@ class OpencodeRunner(AgentRunner):
         logger.info(prompt)
         logger.info("--- opencode prompt end ---")
 
-        args = ["opencode", "run", prompt, "-m", model]
+        # Use JSON streaming mode so we can distinguish text, tools, and metadata.
+        args = ["opencode", "run", prompt, "-m", model, "--format", "json"]
         if session_id:
             args.extend(["--session", session_id])
         if directory:
@@ -105,12 +106,79 @@ class OpencodeRunner(AgentRunner):
             text=True,
             cwd=directory,
         )
-        lines: list[str] = []
+        output_parts: list[str] = []
+        streaming_buffer: str = ""
+
+        def _flush_buffer(final: bool = False) -> None:
+            nonlocal streaming_buffer
+            # Log complete lines; keep any trailing partial line.
+            while "\n" in streaming_buffer:
+                line, streaming_buffer = streaming_buffer.split("\n", 1)
+                if line.strip():
+                    logger.info(line)
+            if final and streaming_buffer.strip():
+                logger.info(streaming_buffer)
+                streaming_buffer = ""
+
         if proc.stdout:
-            for line in proc.stdout:
-                logger.info(line.rstrip("\n"))
-                if capture_output:
-                    lines.append(line)
+            for raw_line in proc.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    # Fallback for any non-JSON output.
+                    logger.info(line)
+                    if capture_output:
+                        output_parts.append(line + "\n")
+                    continue
+
+                event_type = event.get("type")
+
+                if event_type == "text":
+                    part = event.get("part", {})
+                    text = part.get("text", "")
+                    if text:
+                        streaming_buffer += text
+                        _flush_buffer()
+                        if capture_output:
+                            output_parts.append(text)
+
+                elif event_type == "tool_use":
+                    part = event.get("part", {})
+                    tool = part.get("tool", "unknown_tool")
+                    state = part.get("state", {}) or {}
+                    tool_input = state.get("input")
+                    tool_output = state.get("output")
+
+                    # Keep tool logs compact.
+                    def _short(obj: object, max_len: int = 200) -> str:
+                        s = json.dumps(obj, default=str) if obj is not None else ""
+                        return (s[: max_len - 3] + "...") if len(s) > max_len else s
+
+                    logger.info("[tool] %s input=%s", tool, _short(tool_input))
+                    if tool_output:
+                        logger.info("[tool:output] %s %s", tool, _short(tool_output))
+
+                    if capture_output:
+                        if tool_input is not None:
+                            output_parts.append(f"[tool] {tool} input={_short(tool_input)}\n")
+                        if tool_output:
+                            output_parts.append(f"[tool:output] {tool} {_short(tool_output)}\n")
+
+                elif event_type == "error":
+                    error = event.get("error", {})
+                    name = error.get("name", "error")
+                    message = (error.get("data") or {}).get("message") or ""
+                    logger.error("[opencode:error] %s %s", name, message)
+                    if capture_output:
+                        output_parts.append(f"[opencode:error] {name} {message}\n")
+
+                # We currently ignore `step_start` and `step_finish` to keep logs minimal.
+
         proc.wait()
-        return "".join(lines) if capture_output else None
+        _flush_buffer(final=True)
+        return "".join(output_parts) if capture_output else None
 
