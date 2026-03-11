@@ -45,8 +45,12 @@ Selection criteria:
 CWE groups (name -> short description):
 {cwe_groups}
 
-Return only valid JSON:
-{{"reasoning":"<brief reasoning>","group":"<exact group name from list>"}}"""
+Before you respond, think through the options in detail using the earlier analysis and threat model and by conducting additional analysis when needed. Do not skip this internal reasoning step.
+
+When you are ready, respond with **only** a single JSON object capturing your reasoning and final choice in this exact format:
+{{"analysis":"<2-4 sentence reasoning using the codebase and threat model and additional analysis when needed>","group":"<exact group name from list>"}}
+
+Return only this JSON object and nothing else."""
 
 STEP4_SELECT_CWE_AND_PLAN = """You are continuing the benchmark-dataset generation task.
 
@@ -64,7 +68,22 @@ off-by-one in a loop bound, missing input sanitization).
 CWEs in the selected group (CWE# -> Description):
 {cwes}
 
-Do not edit files yet."""
+Do not edit files yet.
+
+Before you respond, reason through which CWE is the most natural fit and how to implement the change so it looks like a genuine developer mistake and by conducting additional analysis when needed. Do not skip this internal reasoning step.
+
+When you are ready, respond with **only** a single JSON object that captures both your reasoning and concrete plan, using this exact format:
+{{
+  "analysis": "<2-4 sentences explaining the chosen CWE, how the bug works, and why it has security implications>",
+  "cwe": "<exact CWE number from the list, e.g. '79' or '89'>",
+  "target": {{
+    "files": ["<relative/path/to/file1.py>", "<relative/path/to/file2.js>"],
+    "symbols": ["<function_or_method_name>", "<class_or_handler_name>"]
+  }},
+  "plan": "<concise description of the minimal code change that will introduce the bug while keeping the codebase mostly functional>"
+}}
+
+Return only this JSON object and nothing else."""
 
 STEP5_EXECUTE = """Now apply the planned code change to create the benchmark sample.
 
@@ -88,7 +107,7 @@ After editing, confirm:
 STEP6_GENERATE_EXPLOIT = """You are writing a non-destructive behavioral proof-of-vulnerability harness for a local research benchmark.
 
 Goal:
-- Create `exploit_files/exploit.sh` as a deterministic script that demonstrates the introduced bug by exercising the code through its real runtime interface.
+- Create `exploit.sh` as a deterministic script that demonstrates the introduced bug by exercising the code through its real runtime interface.
 - The script must verify a bug-specific observable behavior, not merely the presence of changed source code.
 
 Hard requirements:
@@ -112,7 +131,7 @@ Behavioral validation requirements:
 - The harness should be written so that it would fail on a patched snapshot where the bug is removed.
 
 Authoring guidance:
-- Make the script self-contained and runnable as `bash exploit_files/exploit.sh`.
+- Make the script self-contained and runnable as `bash exploit.sh`.
 - Before you finish, run the script locally yourself, inspect its output and exit code, and fix it if the behavior is incorrect or non-deterministic.
 - If your first attempt uses static file inspection, string matching on source code, or any other shortcut, discard it and replace it with a real behavioral proof.
 - Print short diagnostics describing:
@@ -134,7 +153,7 @@ When done, briefly summarize:
 """
 
 
-STEP6_EXPLOIT_NOT_REAL = """The exploit script `exploit_files/exploit.sh` succeeded on the MODIFIED codebase (as expected), \
+STEP6_EXPLOIT_NOT_REAL = """The exploit script `exploit.sh` succeeded on the MODIFIED codebase (as expected), \
 but it ALSO succeeded when run against the ORIGINAL, unmodified codebase. \
 This means the exploit is not a real exploit — it does not actually demonstrate the vulnerability. \
 It passes regardless of whether the bug is present (e.g. it may be checking something unrelated or using static inspection), \
@@ -144,7 +163,7 @@ Attempt number: {attempt}
 Output from running exploit on the clean (original) codebase:
 {feedback}
 
-You must rewrite `exploit_files/exploit.sh` so that it is a real exploit:
+You must rewrite `exploit.sh` so that it is a real exploit:
 1. It exits 0 (success) ONLY when the introduced vulnerability is present (modified codebase).
 2. It exits 1 (failure) on the original, unmodified codebase where the bug does not exist.
 3. The distinction is determined purely through runtime behavior — no grepping source files, \
@@ -155,7 +174,7 @@ Run the script yourself locally to verify it exits 0 on the current (modified) c
 Do not use grep, cat, head, tail, or any form of static file inspection to decide success or failure."""
 
 
-STEP6_FIX_EXPLOIT = """The previous run of `exploit_files/exploit.sh` failed or was rejected. You must fix the script and then run it yourself until it succeeds before finishing.
+STEP6_FIX_EXPLOIT = """The previous run of `exploit.sh` failed or was rejected. You must fix the script and then run it yourself until it succeeds before finishing.
 
 Attempt number: {attempt}
 Feedback from the last run (use this to fix the script):
@@ -163,9 +182,9 @@ Feedback from the last run (use this to fix the script):
 
 Your task in this step:
 1. Read the feedback above and identify why the script failed (wrong behavior, verifier rejection, missing file, wrong exit code, etc.).
-2. Edit `exploit_files/exploit.sh` to address the issue. Do not use grep, cat, head, tail, or any static inspection of source files — success must be determined by exercising the program's runtime behavior.
-3. Run the script yourself in this environment: `bash exploit_files/exploit.sh`. Check its exit code and output.
+2. Edit `exploit.sh` (at the root of the target directory) to address the issue. Do not use grep, cat, head, tail, or any static inspection of source files — success must be determined by exercising the program's runtime behavior.
+3. Run the script yourself in this environment: `bash exploit.sh`. Check its exit code and output.
 4. If it does not exit 0, fix the script again and repeat step 3. You must iterate until the script exits 0 when run locally, or you have made a clear fix and documented what you changed.
 5. Only when the script succeeds locally (exit 0), summarize what you fixed and how the script now verifies the bug behavior.
 
-You are not done until you have run `bash exploit_files/exploit.sh` at least once in this turn and it properly exit 0. Make sure to analyze and justify."""
+You are not done until you have run `bash exploit.sh` at least once in this turn and it properly exit 0. Make sure to analyze and justify."""

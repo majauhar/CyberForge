@@ -1,3 +1,9 @@
+"""Utilities to build a compact, token-budgeted snapshot of a codebase.
+
+This module shells out to `tree` (or falls back to `ls`) to summarize the
+repository structure while respecting an exclusion pattern and a maximum
+token budget, for use in prompts or debugging."""
+
 import shutil
 import subprocess
 from pathlib import Path
