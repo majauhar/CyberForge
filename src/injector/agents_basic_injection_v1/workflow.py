@@ -188,7 +188,7 @@ def fix_exploit_script(state: VulnInjectState) -> VulnInjectState:
     return state
 
 
-# Step 7: Programmatically run exploit.sh
+# Step 7: Programmatically run exploit_files/exploit.sh
 def run_exploit_script(state: VulnInjectState) -> VulnInjectState:
     logger.info("7️⃣ Running exploit script")
     attempts = state.get("exploit_attempts", 0) + 1
@@ -217,8 +217,8 @@ def _route_after_exploit_run(state: VulnInjectState) -> Literal["fix", "verify",
 def _save_snapshot_and_revert(state: VulnInjectState) -> str:
     """Save a snapshot of all modifications then revert the codebase to HEAD.
 
-    exploit.sh at the project root is untracked, so git restore leaves it intact —
-    it remains available for the follow-up run on the original code.
+    exploit_files/ is untracked so git restore leaves it intact — exploit.sh
+    remains available for the follow-up run on the original code.
     Returns the snapshot directory path.
     """
     logger.info("8️⃣🅰️ Saving modifications snapshot")
@@ -235,7 +235,7 @@ def _run_exploit_on_original(state: VulnInjectState) -> dict:
     Returns the raw ExploitRunResult dict.
     """
     real_exploit_attempts = state.get("real_exploit_attempts", 0) + 1
-    logger.info("8️⃣🅲 Running exploit on original codebase (real-exploit check #%s)", real_exploit_attempts)
+    logger.info("8️⃣🅲️ Running exploit on original codebase (real-exploit check #%s)", real_exploit_attempts)
     return run_exploit_once(directory=state["directory"], attempts=real_exploit_attempts)
 
 
@@ -281,11 +281,11 @@ def _route_after_verify(state: VulnInjectState) -> Literal["retry", "done"]:
     return "done"
 
 
-# Step 9: Restore snapshot on success (leave directory in modified state with bug + exploit.sh)
+# Step 9: Restore snapshot so the codebase ends in the injected (modified) state
 def restore_snapshot(state: VulnInjectState) -> VulnInjectState:
-    """Re-apply the snapshot so the directory ends in the modified state (bug + exploit.sh)."""
-    logger.info("9️⃣ Restoring snapshot (modified codebase + exploit.sh)")
-    restore_modifications_from_snapshot(state["directory"], state["snapshot_path"])
+    snapshot_path = state["snapshot_path"]
+    logger.info("9️⃣ Restoring codebase from snapshot at %s", snapshot_path)
+    restore_modifications_from_snapshot(state["directory"], snapshot_path)
     return state
 
 

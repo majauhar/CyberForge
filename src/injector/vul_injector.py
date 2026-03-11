@@ -107,11 +107,7 @@ def main() -> None:
     run_csv_path = Path(args.run_csv) if args.run_csv else _DEFAULT_RUN_CSV
     _save_run_result_info(csv_path=run_csv_path, directory=args.directory, model=args.model, result=result)
 
-    error = result.get("error")
-    if error:
-        print(f"❌ Failure: {error}", file=sys.stderr)
-        sys.exit(1)
-    print(f"✅ Success. Session: {result.get('session_id')}")
+    print(f"{"❌Failure" if result.get("error") else "✅ Success"}. Session: {result.get('session_id')}")
 
 
 if __name__ == "__main__":
