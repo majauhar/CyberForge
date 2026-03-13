@@ -7,7 +7,7 @@ from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy
 
-from injector.exploit_runner import (
+from verifier.exploit_runner import (
     run_exploit_once,
     revert_codebase_changes,
     restore_modifications_from_snapshot,
