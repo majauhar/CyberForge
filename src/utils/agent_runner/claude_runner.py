@@ -20,6 +20,8 @@ from .agent_runner import AgentRunner, SessionStart
 logger = logging.getLogger(__name__)
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"
+# Use full tool/filesystem access for this agent.
+DEFAULT_PERMISSION_MODE = "acceptEdits"
 
 
 class ClaudeAgentRunner(AgentRunner):
@@ -84,6 +86,7 @@ def _run_sync(
             cwd=str(Path(directory).resolve()) if directory else None,
             resume=resume,
             include_partial_messages=True,
+            permission_mode=DEFAULT_PERMISSION_MODE,
         )
 
         session_id: Optional[str] = None
