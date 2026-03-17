@@ -15,15 +15,16 @@ def load_cwe_groups_text() -> str:
     return "\n".join(f'  "{k}": {v}' for k, v in data.items())
 
 
-def load_cwes_by_group(group: str, csv_path: Optional[Path] = None) -> List[Tuple[str, str]]:
+def load_cwes_by_group(
+    group: str, csv_path: Path = CWE_DATA_DIR / "cwe_categories.csv"
+) -> List[Tuple[str, str]]:
     """Load all CWE rows belonging to a given group.
 
     If csv_path is provided, read from that file instead of the default
     CWE_DATA_DIR / "cwe_categories.csv".
     """
     rows: List[Tuple[str, str]] = []
-    source = csv_path if csv_path is not None else CWE_DATA_DIR / "cwe_categories.csv"
-    with open(source, newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row["CWE Group"].strip() == group:
                 rows.append((row["CWE#"].strip(), row["Description"].strip()))
@@ -34,15 +35,29 @@ def format_cwes(rows: List[Tuple[str, str]]) -> str:
     return "\n".join(f"  CWE-{cwe}: {desc}" for cwe, desc in rows)
 
 
-def valid_cwe_groups(json_path: Optional[Path] = None) -> set:
+def valid_cwe_groups(json_path: Path = CWE_DATA_DIR / "cwe_groups.json") -> set:
     """Return the set of valid CWE group names.
 
     If json_path is provided, read groups from that file instead of the default
     CWE_DATA_DIR / "cwe_groups.json".
     """
-    source = json_path if json_path is not None else CWE_DATA_DIR / "cwe_groups.json"
-    with open(source, encoding="utf-8") as f:
+    with open(json_path, encoding="utf-8") as f:
         return set(json.load(f))
+
+
+def all_valid_cwe_ids(
+    csv_path: Path = CWE_DATA_DIR / "cwe_categories.csv",
+) -> set[str]:
+    """Return the set of valid bare CWE ids (e.g. {'79','89'}).
+
+    If csv_path is provided, read IDs from that file instead of the default
+    CWE_DATA_DIR / "cwe_categories.csv".
+    """
+    ids: set[str] = set()
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            ids.add(row["CWE#"].strip())
+    return ids
 
 
 def parse_group_from_response(stdout: str, valid: set) -> Optional[str]:
