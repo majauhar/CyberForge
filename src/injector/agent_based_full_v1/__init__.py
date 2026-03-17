@@ -1,5 +1,5 @@
-"""Agent-based full injection method package."""
+"""agent_based_full_v1 injection method package."""
 
-from .run import run_agent_based_full_v1
+from .run import AgentBasedFullV1
 
-__all__ = ["run_agent_based_full_v1"]
+__all__ = ["AgentBasedFullV1"]

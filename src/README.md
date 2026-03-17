@@ -163,14 +163,44 @@ Given a project + method + model:
 
 ## Outputs
 
-- Run history:
-  - `VulInjector/runs/history/<method_id>_<model_id>_<timestamp>_<project>.json`
-- Runtime metadata/cache:
-  - `VulInjector/runs/workspaces/<project>/runtime.json`
-- Project artifacts:
-  - Success: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/`
-  - Debug success: `vuljector-projects/<project>/debug/vulnerabilities/success/vulnerability_N/`
-  - Debug failure: `vuljector-projects/<project>/debug/vulnerabilities/failed/vulnerability_N/`
+### `VulInjector/runs/`
+
+```
+VulInjector/runs/
+│
+├── history/
+│   └── <method_id>_<model_id>_<timestamp>_<project>.json   # telemetry for every run
+│
+└── workspaces/
+    └── <project>/
+        └── runtime.json   # cached image hash, container id, strategy setup state
+```
+
+`history/` is always written, regardless of success or failure. Each file contains: `status`, `failure_cause`, `cwe_group`, `cwe_id`, `vulnerability_ref`, `vulnerable_commit`, `retries`, `models_used`, `token_usage`, `cost`.
+
+### `vuljector-projects/<project>/`
+
+```
+vuljector-projects/<project>/
+│
+├── vulnerabilities/
+│   └── vulnerability_N/
+│       ├── exploit_files/
+│       │   └── exploit.sh
+│       └── vulnerability_metadata.json
+│
+└── debug/
+    └── vulnerabilities/
+        ├── vulnerability_N/          # debug run that succeeded
+        │   ├── exploit_files/
+        │   │   └── exploit.sh
+        │   └── vulnerability_metadata.json
+        └── failed/
+            └── vulnerability_N/      # debug run that failed
+                └── exploit_files/
+```
+
+`vulnerabilities/` is written on success. `debug/` is written when `--debug` is active (both success and failure). Without `--debug`, failed runs leave no artifacts in `vuljector-projects/`.
 
 ## Notes
 

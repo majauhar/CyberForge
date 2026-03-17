@@ -1,18 +1,18 @@
 """Strategy registry for vuljector."""
 
-from .agent_based_full_v1 import AgentBasedFullV1Strategy
-from .base import FailureCause, InjectionContext, InjectionResult, InjectionStrategy
+from .agent_based_full_v1 import agent_based_full_v1
+from .base import FailureCause, InjectionContext, InjectionResult, Vuljector
 
-STRATEGIES: dict[str, type[InjectionStrategy]] = {
-    "agent_based_full_v1": AgentBasedFullV1Strategy,
+VULJECTORS: dict[str, Vuljector] = {
+    "agent_based_full_v1": agent_based_full_v1,
 }
 
 
-def get_strategy(method_id: str) -> InjectionStrategy:
+def get_vuljector(method_id: str) -> Vuljector:
     try:
-        return STRATEGIES[method_id]()
+        return VULJECTORS[method_id]
     except KeyError as exc:
-        valid = ", ".join(sorted(STRATEGIES))
+        valid = ", ".join(sorted(VULJECTORS))
         raise ValueError(f"Unknown method_id '{method_id}'. Valid values: {valid}") from exc
 
 
@@ -20,6 +20,6 @@ __all__ = [
     "FailureCause",
     "InjectionContext",
     "InjectionResult",
-    "InjectionStrategy",
-    "get_strategy",
+    "Vuljector",
+    "get_vuljector",
 ]

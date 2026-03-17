@@ -25,12 +25,14 @@ class ContainerRuntime:
         project: str,
         setup_dir: Path,
         vulinjector_root: Path,
+        project_root: Path,
         target_dir: str,
         secure_base_commit: str,
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
         self.vulinjector_root = vulinjector_root
+        self.project_root = project_root
         self.target_dir = target_dir
         self.secure_base_commit = secure_base_commit
 
@@ -151,6 +153,8 @@ class ContainerRuntime:
                 self.container_name,
                 "-v",
                 f"{self.vulinjector_root}:/workspace/VulInjector",
+                "-v",
+                f"{self.project_root}:/workspace/vuljector-projects/{self.project}",
                 self.image_tag,
                 "sleep",
                 "infinity",

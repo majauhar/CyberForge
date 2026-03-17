@@ -23,7 +23,7 @@ def run_verification(
             result.failure_message = (tests.stderr or tests.stdout).strip()
             return result
 
-    exploit_sh = f"{result.exploit_dir_in_container}/exploit.sh"
+    exploit_sh = f"{context.vuln_dir_in_container}/exploit_files/exploit.sh"
     vuln_run = runtime.exec(f"bash {exploit_sh}", workdir=context.repo_dir_in_container)
     if vuln_run.returncode != 0:
         result.status = "failure"
@@ -43,7 +43,7 @@ def run_verification(
             result.failure_message = (reset.stderr or reset.stdout).strip()
             return result
     secure_run = runtime.exec(f"bash {exploit_sh}", workdir=context.repo_dir_in_container)
-    runtime.exec("git apply /tmp/vuljector.patch", workdir=context.repo_dir_in_container)
+    runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=context.repo_dir_in_container)
 
     if secure_run.returncode == 0:
         result.status = "failure"

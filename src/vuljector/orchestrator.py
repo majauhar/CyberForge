@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
+import shlex
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from setup import ContainerRuntime
 from verifier import run_verification
-from vuljector.strategies import InjectionContext, InjectionResult, get_strategy
+from vuljector.strategies import (
+    FailureCause,
+    InjectionContext,
+    InjectionResult,
+    get_vuljector,
+)
 
 
 def _sanitize_filename(value: str) -> str:
@@ -68,6 +76,41 @@ def _save_history(
     return out
 
 
+def _run_injection(
+    runtime: ContainerRuntime,
+    vuljector_module: str,
+    context: InjectionContext,
+) -> InjectionResult:
+    ctx_json = shlex.quote(json.dumps(dataclasses.asdict(context)))
+    exec_result = runtime.exec(f"python3 -m {vuljector_module} --context {ctx_json}")
+    if exec_result.returncode != 0:
+        return InjectionResult(
+            status="failure",
+            cwe_group=None,
+            cwe_id=None,
+            failure_cause=FailureCause.OTHER,
+            failure_message=(exec_result.stderr or exec_result.stdout).strip(),
+            retries=0,
+            models_used=[context.model_id],
+            token_usage=None,
+            cost=None,
+            complexity=None,
+        )
+    data = json.loads(exec_result.stdout.strip())
+    return InjectionResult(
+        status=data["status"],
+        cwe_group=data.get("cwe_group"),
+        cwe_id=data.get("cwe_id"),
+        failure_cause=FailureCause(data["failure_cause"]) if data.get("failure_cause") else None,
+        failure_message=data.get("failure_message") or "",
+        retries=int(data.get("retries") or 0),
+        models_used=data.get("models_used") or [context.model_id],
+        token_usage=data.get("token_usage"),
+        cost=data.get("cost"),
+        complexity=data.get("complexity"),
+    )
+
+
 def run_end_to_end(
     *,
     project: str,
@@ -77,14 +120,12 @@ def run_end_to_end(
     cwe_ids: list[str] | None = None,
     debug: bool = False,
 ) -> dict:
-    # Resolve paths for the checked-out project and its configuration.
     vulinjector_root = Path(__file__).resolve().parents[2]
     project_root = vulinjector_root.parent / "vuljector-projects" / project
     project_json_path = project_root / "project.json"
     if not project_json_path.exists():
         raise FileNotFoundError(f"Missing project.json: {project_json_path}")
 
-    # Load high-level project configuration: repo location and base commit.
     project_data = json.loads(project_json_path.read_text(encoding="utf-8"))
     secure_base_commit = project_data.get("secure_base_commit", "")
     target_dir = project_data.get("target_dir")
@@ -93,27 +134,37 @@ def run_end_to_end(
             "project.json is missing required field 'target_dir'. "
             "This should be set by the oss-fuzz vuljector init script."
         )
-    # Optional command to run unit / integration tests inside the container.
     unit_test_cmd = (
         project_data.get("verification", {}).get("unit_test_cmd")
         if isinstance(project_data.get("verification"), dict)
         else None
     )
 
-    # Spin up (or connect to) the container that hosts the target repo.
+    # Determine output directory before injection so the container can write there directly.
+    run_id = uuid4().hex
+    vuljector = get_vuljector(method_id)
+    if debug:
+        base_dir = project_root / "debug" / "vulnerabilities"
+    else:
+        base_dir = project_root / "vulnerabilities"
+    vulnerability_ref = _next_vulnerability_id(base_dir)
+    vuln_dir_host = base_dir / vulnerability_ref
+    vuln_dir_host.mkdir(parents=True, exist_ok=True)
+    vuln_dir_in_container = (
+        f"/workspace/vuljector-projects/{project}/"
+        + str(vuln_dir_host.relative_to(project_root))
+    )
+
     runtime = ContainerRuntime(
         project=project,
         setup_dir=project_root / "setup",
         vulinjector_root=vulinjector_root,
+        project_root=project_root,
         target_dir=target_dir,
         secure_base_commit=secure_base_commit,
     )
-    # Ensure the container, repo checkout and tools are ready to use.
     runtime.ensure_ready()
 
-    # Pick the injection strategy (LLM prompting / workflow) and bind run metadata.
-    strategy = get_strategy(method_id)
-    run_id = uuid4().hex
     context = InjectionContext(
         project=project,
         run_id=run_id,
@@ -121,50 +172,37 @@ def run_end_to_end(
         model_id=model_id,
         target_dir=target_dir,
         secure_base_commit=secure_base_commit,
+        repo_dir_in_container=runtime.repo_dir_in_container,
+        vuln_dir_in_container=vuln_dir_in_container,
         cwe_groups=cwe_groups,
         cwe_ids=cwe_ids,
         debug=debug,
-        project_root=str(project_root),
-        repo_dir_in_container=runtime.repo_dir_in_container,
         unit_test_cmd=unit_test_cmd,
     )
 
-    # Perform one-time strategy-specific setup the first time it runs for this project.
-    if not runtime.is_strategy_setup_done(strategy.id):
-        strategy.setup(runtime, context)
-        runtime.mark_strategy_setup_done(strategy.id)
+    # One-time strategy setup (cached per setup hash).
+    if not runtime.is_strategy_setup_done(vuljector.id):
+        for cmd in vuljector.setup_cmds:
+            runtime.exec(cmd)
+        runtime.mark_strategy_setup_done(vuljector.id)
 
-    # Ask the strategy to inject a vulnerability and then verify the result.
-    result: InjectionResult = strategy.run(runtime, context)
+    result: InjectionResult = _run_injection(runtime, vuljector.module, context)
     result = run_verification(runtime=runtime, context=context, result=result)
 
-    # If the run succeeded (or we are in debug mode), persist the exploit artifacts
-    # and publish a branch that points at the vulnerable commit.
-    vulnerability_ref = ""
     vulnerable_commit = ""
     if result.status == "success" or debug:
-        if result.status == "success" and not debug:
-            base_dir = project_root / "vulnerabilities"
-            vulnerability_ref = _next_vulnerability_id(base_dir)
-            branch = f"vuljector/{vulnerability_ref}"
-        elif result.status == "success":
-            base_dir = project_root / "debug" / "vulnerabilities" / "success"
-            vulnerability_ref = _next_vulnerability_id(base_dir)
-            branch = f"debug/success/{run_id}"
-        else:
-            base_dir = project_root / "debug" / "vulnerabilities" / "failed"
-            vulnerability_ref = _next_vulnerability_id(base_dir)
-            branch = f"debug/failed/{run_id}"
-
-        vuln_dir = base_dir / vulnerability_ref
-        vuln_dir.mkdir(parents=True, exist_ok=True)
-        runtime.copy_from(result.exploit_dir_in_container, vuln_dir)
+        branch = (
+            f"vuljector/{vulnerability_ref}"
+            if result.status == "success" and not debug
+            else f"debug/success/{run_id}"
+            if result.status == "success"
+            else f"debug/failed/{run_id}"
+        )
         vulnerable_commit = _commit_and_push(
             runtime=runtime,
             branch=branch,
             commit_message=f"vuljector {vulnerability_ref}",
         )
-        # Store a small JSON file alongside the exploit for quick lookup later.
         metadata = {
             "id": vulnerability_ref,
             "cwe_group": result.cwe_group or "",
@@ -174,13 +212,15 @@ def run_end_to_end(
         }
         if result.complexity:
             metadata["complexity"] = result.complexity
-        (vuln_dir / "vulnerability_metadata.json").write_text(
+        (vuln_dir_host / "vulnerability_metadata.json").write_text(
             json.dumps(metadata, indent=2) + "\n",
             encoding="utf-8",
         )
+    else:
+        # Failure without debug: discard the pre-created directory.
+        shutil.rmtree(vuln_dir_host, ignore_errors=True)
+        vulnerability_ref = ""
 
-    # Record a machine-readable summary of the run (success or failure) under
-    # `runs/history` so callers can inspect or aggregate past executions.
     payload = {
         "run_id": run_id,
         "project": project,

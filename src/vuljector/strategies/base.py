@@ -1,13 +1,10 @@
-"""Base contracts for vuljector injection strategies."""
+"""Shared contracts for vuljector injection strategies."""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
-
-from setup import ContainerRuntime
 
 
 class FailureCause(str, Enum):
@@ -25,11 +22,11 @@ class InjectionContext:
     model_id: str
     target_dir: str
     secure_base_commit: str
+    repo_dir_in_container: str
+    vuln_dir_in_container: str
     cwe_groups: list[str] | None
     cwe_ids: list[str] | None
     debug: bool
-    project_root: str
-    repo_dir_in_container: str
     unit_test_cmd: str | None = None
 
 
@@ -45,21 +42,12 @@ class InjectionResult:
     token_usage: dict | None
     cost: float | None
     complexity: str | None
-    exploit_dir_in_container: str
 
 
-class InjectionStrategy(ABC):
-    """Abstract strategy interface for vuljector."""
+@dataclass
+class Vuljector:
+    """Descriptor for an injection method: what module to run and how to set it up."""
 
-    @property
-    @abstractmethod
-    def id(self) -> str:
-        raise NotImplementedError
-
-    def setup(self, runtime: ContainerRuntime, context: InjectionContext) -> None:
-        """Optional strategy-specific setup. Default: no-op."""
-        return None
-
-    @abstractmethod
-    def run(self, runtime: ContainerRuntime, context: InjectionContext) -> InjectionResult:
-        raise NotImplementedError
+    id: str
+    module: str  # Python module path for 'python3 -m <module>'
+    setup_cmds: list[str] = field(default_factory=list)
