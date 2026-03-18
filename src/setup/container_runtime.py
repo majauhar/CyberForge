@@ -1,4 +1,4 @@
-"""Minimal Docker runtime wrapper for container-first vuljector runs."""
+"""Docker runtime for setup/selection/injection phases (per-run mount)."""
 
 from __future__ import annotations
 
@@ -15,48 +15,79 @@ class ExecResult:
     stdout: str
     stderr: str
 
+    def raise_for_status(self, message: str) -> "ExecResult":
+        if self.returncode != 0:
+            detail = (self.stderr or self.stdout).strip()
+            raise RuntimeError(f"{message}: {detail}")
+        return self
+
 
 class ContainerRuntime:
-    """Build/reuse a project container and execute commands in it."""
+    """Build/reuse project image and run phase containers with per-run mounts."""
 
     def __init__(
         self,
         *,
         project: str,
         setup_dir: Path,
-        vulinjector_root: Path,
-        project_root: Path,
         target_dir: str,
         secure_base_commit: str,
+        workspace_dir: Path,
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
-        self.vulinjector_root = vulinjector_root
-        self.project_root = project_root
         self.target_dir = target_dir
         self.secure_base_commit = secure_base_commit
-
-        self.image_tag = f"vuljector/{project}:latest"
-        self.container_name = f"vuljector-{project}"
-        self.repo_dir_in_container = f"/src/{target_dir}"
-
-        self.workspace_dir = self.vulinjector_root / "runs" / "workspaces" / project
+        self.workspace_dir = workspace_dir
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()
 
-    def ensure_ready(self) -> None:
-        setup_hash = self._compute_setup_hash(self.setup_dir)
-        needs_build = (self.meta.get("setup_hash") != setup_hash) or (not self._image_exists())
-        if needs_build:
-            self._build_image()
-        self._ensure_container_running()
-        self._ensure_repo_ready()
-        self.meta["setup_hash"] = setup_hash
-        self.meta["image_tag"] = self.image_tag
-        self.meta["container_id"] = self._container_id()
-        self.meta.setdefault("last_strategy_setup", {})
+        self.setup_hash = self._compute_setup_hash(self.setup_dir)
+        self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
+        self.repo_dir_in_container = f"/src/{target_dir}"
+        self.container_name = ""
+
+    def ensure_image(self) -> None:
+        if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(self.image_tag):
+            self._build_image(self.image_tag)
+            self.meta["setup_hash"] = self.setup_hash
+            self.meta["image_tag"] = self.image_tag
+            self._save_meta()
+
+    def start_for_run(self, *, phase: str, run_mount_dir: Path) -> None:
+        self.stop()
+        self.ensure_image()
+        run_mount_dir.mkdir(parents=True, exist_ok=True)
+        self.container_name = f"vuljector-{self.project}-{phase}"
+        args = [
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            self.container_name,
+            "-v",
+            f"{run_mount_dir}:/workspace/run",
+            self.image_tag,
+            "sleep",
+            "infinity",
+        ]
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"docker run failed: {(result.stderr or result.stdout).strip()}")
+        self.meta["container_id"] = self._container_id(self.container_name)
         self._save_meta()
+
+    def stop(self) -> None:
+        if not self.container_name:
+            return
+        subprocess.run(
+            ["docker", "rm", "-f", self.container_name],
+            capture_output=True,
+            text=True,
+        )
+        self.container_name = ""
 
     def exec(self, cmd: str, *, workdir: str | None = None) -> ExecResult:
         shell = cmd if workdir is None else f"cd {workdir} && {cmd}"
@@ -75,7 +106,7 @@ class ContainerRuntime:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"docker cp failed: {result.stderr.strip()}")
+            raise RuntimeError(f"docker cp (from) failed: {(result.stderr or result.stdout).strip()}")
 
     def copy_to(self, host_path: Path, container_path: str) -> None:
         result = subprocess.run(
@@ -84,118 +115,58 @@ class ContainerRuntime:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"docker cp failed: {result.stderr.strip()}")
+            raise RuntimeError(f"docker cp (to) failed: {(result.stderr or result.stdout).strip()}")
 
-    def ensure_repo_clean(self) -> None:
-        res = self.exec("git fetch origin", workdir=self.repo_dir_in_container)
-        if res.returncode != 0:
-            raise RuntimeError(f"git fetch failed: {res.stderr.strip()}")
-        if self.secure_base_commit:
-            res = self.exec(
-                f"git reset --hard {self.secure_base_commit}",
-                workdir=self.repo_dir_in_container,
-            )
-            if res.returncode != 0:
-                raise RuntimeError(f"git reset failed: {res.stderr.strip()}")
-        res = self.exec("git clean -fdx", workdir=self.repo_dir_in_container)
-        if res.returncode != 0:
-            raise RuntimeError(f"git clean failed: {res.stderr.strip()}")
+    def ensure_repo_exists(self) -> None:
+        self.exec(f"test -d {self.repo_dir_in_container}").raise_for_status(
+            f"missing repo directory in container: {self.repo_dir_in_container}"
+        )
 
-    def is_strategy_setup_done(self, method_id: str) -> bool:
-        setup_hash = self.meta.get("setup_hash", "")
-        setups = self.meta.get("last_strategy_setup", {})
-        return setups.get(method_id) == setup_hash
+    def strategy_key(self, phase: str, strategy_id: str) -> str:
+        return f"{phase}:{strategy_id}"
 
-    def mark_strategy_setup_done(self, method_id: str) -> None:
-        setup_hash = self.meta.get("setup_hash", "")
-        setups = self.meta.setdefault("last_strategy_setup", {})
-        setups[method_id] = setup_hash
+    def is_strategy_setup_done(self, *, phase: str, strategy_id: str) -> bool:
+        setups = self.meta.get("strategy_setup_done", {})
+        return setups.get(self.strategy_key(phase, strategy_id)) == self.setup_hash
+
+    def mark_strategy_setup_done(self, *, phase: str, strategy_id: str) -> None:
+        setups = self.meta.setdefault("strategy_setup_done", {})
+        setups[self.strategy_key(phase, strategy_id)] = self.setup_hash
         self._save_meta()
 
-    def _ensure_repo_ready(self) -> None:
-        exists = self.exec(f"test -d {self.repo_dir_in_container}/.git").returncode == 0
-        if not exists:
-            raise RuntimeError(
-                "Repository not found inside container at "
-                f"{self.repo_dir_in_container}. "
-                "Expected setup Dockerfile to clone it. "
-                "Check project.json target_dir and setup/Dockerfile."
-            )
-        self.ensure_repo_clean()
+    def mark_setup_completed(self, completed: bool = True) -> None:
+        self.meta["setup_completed"] = completed
+        self._save_meta()
 
-    def _build_image(self) -> None:
+    def setup_completed(self) -> bool:
+        return bool(self.meta.get("setup_completed"))
+
+    def _build_image(self, image_tag: str) -> None:
         result = subprocess.run(
-            ["docker", "build", "-t", self.image_tag, str(self.setup_dir)],
+            ["docker", "build", "-t", image_tag, str(self.setup_dir)],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"docker build failed: {result.stderr.strip()}")
+            raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
 
-    def _ensure_container_running(self) -> None:
-        if self._container_running():
-            return
-        if self._container_exists():
-            result = subprocess.run(
-                ["docker", "start", self.container_name],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"docker start failed: {result.stderr.strip()}")
-            return
+    @staticmethod
+    def _image_exists(image_tag: str) -> bool:
         result = subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self.container_name,
-                "-v",
-                f"{self.vulinjector_root}:/workspace/VulInjector",
-                "-v",
-                f"{self.project_root}:/workspace/vuljector-projects/{self.project}",
-                self.image_tag,
-                "sleep",
-                "infinity",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"docker run failed: {result.stderr.strip()}")
-
-    def _container_running(self) -> bool:
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", self.container_name],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "true"
-
-    def _container_exists(self) -> bool:
-        result = subprocess.run(
-            ["docker", "inspect", self.container_name],
+            ["docker", "image", "inspect", image_tag],
             capture_output=True,
             text=True,
         )
         return result.returncode == 0
 
-    def _container_id(self) -> str:
+    @staticmethod
+    def _container_id(container_name: str) -> str:
         result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.Id}}", self.container_name],
+            ["docker", "inspect", "-f", "{{.Id}}", container_name],
             capture_output=True,
             text=True,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
-
-    def _image_exists(self) -> bool:
-        result = subprocess.run(
-            ["docker", "image", "inspect", self.image_tag],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
 
     def _load_meta(self) -> dict:
         if not self.meta_path.exists():

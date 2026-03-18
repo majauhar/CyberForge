@@ -1,18 +1,13 @@
-# Vuljector
+# Vuljector (V2)
 
-A framework for generating a security dataset of executable environements by introducing realistic vulnerabilities from OSS-Fuzz projects.
+Vuljector V2 is a phase-based pipeline for generating vulnerability snapshots from OSS-Fuzz projects.
+It runs three independent phases:
 
-## Table of Contents
+1. `setup`
+2. `selection`
+3. `injection`
 
-- [Installation](#installation)
-- [Usage](#usage)
-- [Diagrams](#diagrams)
-  - [Workspace Layout](#workspace-layout)
-  - [End-to-End Flow](#end-to-end-flow)
-- [What it does](#what-it-does)
-- [Module layout](#module-layout)
-- [Outputs](#outputs)
-- [Notes](#notes)
+The implementation in this repository follows `ARCHITECTURE.md`.
 
 ## Installation
 
@@ -20,189 +15,145 @@ Set up a workspace where these repositories are siblings:
 
 ```text
 Vuljector/
-  VulInjector/          # orchestration, strategies, injector, verifier
+  VulInjector/
     src/
-  oss-fuzz/             # project setup sources + init/fork tooling
-  vuljector-projects/   # prepared projects + output vulnerabilities
+  oss-fuzz/
+  vuljector-projects/
 ```
 
 ```bash
 mkdir Vuljector
 cd Vuljector
-
 git clone https://github.com/AmL-Dev/VulInjector VulInjector
 git clone https://github.com/vuljector/oss-fuzz oss-fuzz
 git clone https://github.com/vuljector/vuljector-projects vuljector-projects
 ```
 
-Install `uv`:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Install Python dependencies:
+Then install dependencies:
 
 ```bash
 cd VulInjector/src
 uv sync
 ```
 
-System requirements:
+Requirements:
 
 - Docker
 - Git
-- Python
+- Python 3.12+
 
-## Usage
+## Project preparation
 
-### First time: initialize a project
-
-Before running a project for the first time, initialize it from `oss-fuzz`:
+Initialize a dataset project from OSS-Fuzz:
 
 ```bash
-cd oss-fuzz/vuljector/init
+cd ../oss-fuzz/vuljector/init
 python3 init_project.py <project>
 ```
 
-This creates `vuljector-projects/<project>/` with `setup/` and `project.json` including:
+This creates `vuljector-projects/<project>/` with:
 
-- `repos.forked_main_repo`
-- `target_dir`
-- `secure_base_commit`
+- `setup/`
+- `project.json`
 
-### Run
+## CLI usage
 
-From `VulInjector/src`:
+Run commands from `VulInjector/src`:
 
-```bash
-python3 -m vuljector.vuljector <project> <method_id> <model_id> [--cwe-groups G1,G2] [--cwe-ids 79,89] [--debug]
-```
-
-Example:
+### Setup phase (must run first)
 
 ```bash
-python3 -m vuljector.vuljector flask agent_based_full_v1 rchat/gpt-oss-120b --debug
+python3 -m vuljector.cli setup <project>
 ```
 
-Arguments:
+What it does:
 
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `project` | yes | Project directory name inside `vuljector-projects` (e.g. `flask`) |
-| `method_id` | yes | Injection strategy id (currently `agent_based_full_v1`) |
-| `model_id` | yes | Model passed to the selected strategy; also recorded in run history filename |
-| `--cwe-groups` | no | Comma-separated CWE group names to restrict injection to (e.g. `Input validation,Web`) |
-| `--cwe-ids` | no | Comma-separated CWE ids to restrict injection to (e.g. `79,89`) |
-| `--debug` | no | Save failed runs under `project/debug/...` for inspection; without this flag failed runs are discarded from the dataset |
+- builds/reuses Docker image from `vuljector-projects/<project>/setup/`
+- resets repo to `secure_base_commit`
+- backs up `.git` into `runs/workspaces/<project>/.git_backup/`
+- removes `.git` from container for agent-facing phases
+- if `unit_tests/test.sh` exists, computes `unit_tests.expected_passing_count` in `project.json`
 
-If you want VulInjector to run project tests or health checks as part of verification, add an optional `verification.unit_test_cmd` field in `vuljector-projects/<project>/project.json`, for example:
+### Selection phase
 
-```json
-"verification": {
-  "unit_test_cmd": "pytest"
-}
+```bash
+python3 -m vuljector.cli selection <project> <selection_strategy_id> <model_id> [--cwe-groups G1,G2] [--cwe-ids 79,89]
 ```
 
-This command is executed inside the container at the repository root; a non-zero exit code marks the run as failed with `UNIT_TESTS_FAILED`.
+Default strategy implemented in V2:
 
-## Diagrams
+- `vanilla_agent_v1` (single prompt, single agent run)
 
-### Workspace Layout
+### Injection phase
 
-```mermaid
-flowchart TD
-    workspace[Vuljector]
-    workspace --> vulinjector["VulInjector\norchestration, strategies, injector, verifier"]
-    workspace --> ossfuzz["oss-fuzz\nproject setup files and init/fork tooling"]
-    workspace --> projects["vuljector-projects\nprepared projects and vulnerability outputs"]
+```bash
+python3 -m vuljector.cli injection <project> <injection_strategy_id> <model_id> <candidates_file> [--num-vulnerabilities 1] [--debug]
 ```
 
-### End-to-End Flow
+Default strategy implemented in V2:
 
-```mermaid
-flowchart TD
-    input["project, method_id, model_id\noptional cwe filters, debug"] --> cli[CLI]
+- `vanilla_agent_v1` (single prompt, single agent run)
 
-    projectjson["vuljector-projects/project.json"] --> cli
-    setupdir["vuljector-projects/project/setup/*"] --> runtime[BuildOrReuseContainer]
+Debug behavior:
 
-    cli --> runtime
-    runtime --> strategysetup[StrategySetup]
-    strategysetup --> inject[RunInjectionStrategy]
-    inject --> verify[RunVerification]
-    verify --> savegate{SaveArtifacts?}
-    savegate -->|"success or debug=true"| outartifacts["vuljector-projects/project/(vulnerabilities|debug)/..."]
-    savegate -->|"failure and debug=false"| fail[FailWithoutArtifacts]
-    outartifacts --> outhistory["VulInjector/runs/history/"]
-    fail --> outhistory
+- without `--debug`: persist dataset only on success to `vulnerabilities/`
+- with `--debug`: always persist snapshots to:
+  - `debug/success/` on success
+  - `debug/failed/` on failure
+
+### Convenience wrapper
+
+```bash
+python3 -m vuljector.cli run <project> <selection_strategy_id> <injection_strategy_id> <model_id> [--cwe-groups ...] [--cwe-ids ...] [--num-vulnerabilities 1] [--debug]
 ```
 
-## What it does
-
-Given a project + method + model:
-
-1. Loads `vuljector-projects/<project>/project.json`.
-2. Builds/reuses Docker image from `vuljector-projects/<project>/setup/`.
-3. Starts/reuses container and ensures clean repo state at `secure_base_commit`.
-4. Runs selected strategy inside container.
-5. Verifies result:
-   - optional unit tests
-   - exploit must pass on vulnerable code
-   - exploit must fail on secure code
-6. Saves artifacts (success, or debug mode) and always writes run telemetry.
-
-## Module layout
-
-- `vuljector/`: CLI + orchestrator
-- `vuljector/strategies/`: strategy interface and adapters
-- `injector/`: method implementations (e.g. `injector/agent_based_full_v1/`)
-- `verifier/`: verification pipeline
-- `setup/`: Docker runtime/build/reuse helpers
-- `utils/`: shared runner/helpers
+This runs `setup` if needed, then `selection`, then `injection`.
 
 ## Outputs
 
-### `VulInjector/runs/`
+### Runs data
 
-```
+```text
 VulInjector/runs/
 │
-├── history/
-│   └── <method_id>_<model_id>_<timestamp>_<project>.json   # telemetry for every run
-│
-└── workspaces/
-    └── <project>/
-        └── runtime.json   # cached image hash, container id, strategy setup state
-```
-
-`history/` is always written, regardless of success or failure. Each file contains: `status`, `failure_cause`, `cwe_group`, `cwe_id`, `vulnerability_ref`, `vulnerable_commit`, `retries`, `models_used`, `token_usage`, `cost`.
-
-### `vuljector-projects/<project>/`
-
-```
-vuljector-projects/<project>/
-│
-├── vulnerabilities/
-│   └── vulnerability_N/
+├── setup/<project>/<setup_run_id>/
+│   ├── setup_request.json
+│   ├── setup_result.json
+│   └── setup_log.txt
+├── selection/<project>/<selection_run_id>/
+│   ├── selection_request.json
+│   ├── candidates.json
+│   └── selection_log.txt
+├── injection/<project>/<injection_run_id>/
+│   ├── injection_request.json
+│   ├── injection_result.json
+│   ├── verification_result.json
+│   ├── logs/run.log
+│   └── artifacts/
 │       ├── exploit_files/
-│       │   └── exploit.sh
-│       └── vulnerability_metadata.json
-│
-└── debug/
-    └── vulnerabilities/
-        ├── vulnerability_N/          # debug run that succeeded
-        │   ├── exploit_files/
-        │   │   └── exploit.sh
-        │   └── vulnerability_metadata.json
-        └── failed/
-            └── vulnerability_N/      # debug run that failed
-                └── exploit_files/
+│       └── snapshot/
+└── workspaces/<project>/
+    ├── runtime.json
+    └── .git_backup/
 ```
 
-`vulnerabilities/` is written on success. `debug/` is written when `--debug` is active (both success and failure). Without `--debug`, failed runs leave no artifacts in `vuljector-projects/`.
+### Dataset artifacts
+
+```text
+vuljector-projects/<project>/
+├── vulnerabilities/vulnerability_N/   # success, non-debug
+│   ├── vulnerability_metadata.json
+│   ├── exploit_files/
+│   └── snapshot/
+│       ├── files/
+│       └── manifest.json
+└── debug/
+    ├── success/vulnerability_N/
+    └── failed/vulnerability_N/
+```
 
 ## Notes
 
-- Runtime does **not** clone repos. Repos are expected in the container from `setup/Dockerfile`.
-- If `target_dir` is wrong, runtime fails early with a clear error.
+- V2 stores vulnerabilities as snapshots, not commits.
+- Selection and injection are independent phases, but both require completed setup.
+- Per phase run, only one run directory is mounted to the container at `/workspace/run`.

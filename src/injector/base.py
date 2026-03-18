@@ -1,19 +1,38 @@
-"""Abstract base for injection method implementations."""
+"""Injection strategy interfaces."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
-from vuljector.strategies.base import InjectionContext, InjectionResult
+from setup.container_runtime import ContainerRuntime
+from vuljector.io_contracts import InjectionResult, SelectionCandidate
 
 
-class InjectionMethod(ABC):
-    """Standard interface for an injection method.
+@dataclass
+class InjectionRequest:
+    project: str
+    run_id: str
+    strategy_id: str
+    model_id: str
+    num_vulnerabilities: int
+    debug: bool
 
-    Each method lives under injector/<method_id>/run.py and is invoked via
-    'python3 -m injector.<method_id>.run --context <json>'.
-    """
+
+class InjectionStrategy(ABC):
+    @property
+    @abstractmethod
+    def id(self) -> str:
+        raise NotImplementedError
+
+    def setup(self, runtime: ContainerRuntime) -> None:
+        return None
 
     @abstractmethod
-    def run(self, context: InjectionContext) -> InjectionResult:
+    def run(
+        self,
+        runtime: ContainerRuntime,
+        request: InjectionRequest,
+        candidate: SelectionCandidate,
+    ) -> InjectionResult:
         raise NotImplementedError
