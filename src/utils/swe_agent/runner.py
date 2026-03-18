@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from pathlib import Path
+import io
+from contextlib import redirect_stdout, redirect_stderr
 from setup.container_runtime import ContainerRuntime
 from utils.paths import src_root
 
@@ -23,7 +26,7 @@ def run_single_prompt_agent(
     os.environ.setdefault("MSWEA_COST_TRACKING", env.get("MSWEA_COST_TRACKING", "ignore_errors"))
     log_file_on_host = _host_run_mount_path(runtime, log_path_in_run_mount)
     log_file_on_host.parent.mkdir(parents=True, exist_ok=True)
-    log_file_on_host.write_text("mini-swe-agent run started\n", encoding="utf-8")
+    log_file_on_host.write_text("mini-swe-agent run started\n\n", encoding="utf-8")
 
     try:
         from minisweagent.agents.default import DefaultAgent
@@ -40,6 +43,7 @@ def run_single_prompt_agent(
         )
 
     proxy_script = _write_docker_proxy_script(runtime.container_name)
+    log_buf = io.StringIO()
     try:
         docker_env = DockerEnvironment(
             image=runtime.image_tag,
@@ -82,14 +86,24 @@ def run_single_prompt_agent(
                 "Return the final answer directly in your last message.\n"
                 "If STRICT JSON is requested, answer with STRICT JSON only."
             ),
-            step_limit=24,
+            step_limit=20,
         )
-        result = agent.run(task=request.prompt)
+        log_buf = io.StringIO()
+        handler = logging.StreamHandler(log_buf)
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        root = logging.getLogger()
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        try:
+            result = agent.run(task=request.prompt)
+        finally:
+            root.removeHandler(handler)
         # DefaultAgent.run returns a dict with exit_status/submission.
         exit_status = str(result.get("exit_status", ""))
         submission = str(result.get("submission", "") or "")
+        log_contents = log_buf.getvalue()
         log_file_on_host.write_text(
-            "mini-swe-agent run finished\n\n" + repr(result) + "\n",
+            log_contents + "\n---\nmini-swe-agent run finished\n\n" + repr(result) + "\n",
             encoding="utf-8",
         )
         if not submission:
@@ -100,8 +114,13 @@ def run_single_prompt_agent(
             )
         return SweAgentResponse(returncode=0, stdout=submission, stderr="")
     except Exception as exc:
-        # Persist exception details in swe_agent.log for postmortem.
-        log_file_on_host.write_text("mini-swe-agent run failed\n\n" + f"{exc}\n", encoding="utf-8")
+        # Persist exception details (including any partial logs) to swe_agent.log.
+        msg = "mini-swe-agent run failed\n\n" + f"{exc}\n"
+        try:
+            msg = log_buf.getvalue() + "\n" + msg
+        except Exception:
+            pass
+        log_file_on_host.write_text(msg, encoding="utf-8")
         return SweAgentResponse(returncode=1, stdout="", stderr=str(exc))
     finally:
         try:
