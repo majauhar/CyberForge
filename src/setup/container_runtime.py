@@ -89,13 +89,20 @@ class ContainerRuntime:
         )
         self.container_name = ""
 
-    def exec(self, cmd: str, *, workdir: str | None = None) -> ExecResult:
+    def exec(
+        self,
+        cmd: str,
+        *,
+        workdir: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ExecResult:
         shell = cmd if workdir is None else f"cd {workdir} && {cmd}"
-        result = subprocess.run(
-            ["docker", "exec", self.container_name, "bash", "-lc", shell],
-            capture_output=True,
-            text=True,
-        )
+        args = ["docker", "exec"]
+        if env:
+            for key, value in env.items():
+                args.extend(["-e", f"{key}={value}"])
+        args.extend([self.container_name, "bash", "-lc", shell])
+        result = subprocess.run(args, capture_output=True, text=True)
         return ExecResult(result.returncode, result.stdout, result.stderr)
 
     def copy_from(self, container_path: str, host_path: Path) -> None:
