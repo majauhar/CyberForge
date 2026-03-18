@@ -42,7 +42,11 @@ class VanillaSelectionStrategy(SelectionStrategy):
         )
         candidates = _parse_candidates(response.stdout)
         if not candidates:
-            candidates = [_fallback_candidate(runtime)]
+            detail = (response.stderr or response.stdout).strip()
+            raise RuntimeError(
+                "Selection strategy did not return valid JSON candidates. "
+                f"Agent output: {detail[:1200]}"
+            )
         return SelectionResult(
             schema_version="v2",
             project=request.project,
@@ -79,21 +83,4 @@ def _parse_candidates(stdout: str) -> list[SelectionCandidate]:
             )
         )
     return out
-
-
-def _fallback_candidate(runtime: ContainerRuntime) -> SelectionCandidate:
-    cmd = "git ls-files | head -n 1"
-    result = runtime.exec(cmd, workdir=runtime.repo_dir_in_container)
-    repo_path = result.stdout.strip() or "UNKNOWN_PATH"
-    return SelectionCandidate(
-        candidate_id="cand_0001",
-        rank=1,
-        cwe_group="Input Validation",
-        cwe_id="79",
-        repo_path=repo_path,
-        symbol="unknown",
-        location_hint="fallback candidate from first tracked file",
-        rationale="Fallback candidate because model output was missing/invalid.",
-        confidence=0.1,
-    )
 

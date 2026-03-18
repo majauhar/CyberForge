@@ -47,6 +47,7 @@ class ContainerRuntime:
         self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
         self.repo_dir_in_container = f"/src/{target_dir}"
         self.container_name = ""
+        self.run_mount_dir: Path | None = None
 
     def ensure_image(self) -> None:
         if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(self.image_tag):
@@ -59,7 +60,15 @@ class ContainerRuntime:
         self.stop()
         self.ensure_image()
         run_mount_dir.mkdir(parents=True, exist_ok=True)
+        self.run_mount_dir = run_mount_dir
         self.container_name = f"vuljector-{self.project}-{phase}"
+        # If a previous process crashed before cleanup, the name may still exist.
+        # Remove it proactively so docker run doesn't fail with a conflict.
+        subprocess.run(
+            ["docker", "rm", "-f", self.container_name],
+            capture_output=True,
+            text=True,
+        )
         args = [
             "docker",
             "run",
@@ -88,6 +97,7 @@ class ContainerRuntime:
             text=True,
         )
         self.container_name = ""
+        self.run_mount_dir = None
 
     def exec(
         self,
