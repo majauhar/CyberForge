@@ -23,6 +23,7 @@ def load_project_config(project: str) -> ProjectConfig:
         repos=dict(payload.get("repos", {})),
         source=dict(payload.get("source", {})),
         unit_tests=payload.get("unit_tests"),
+        oss_fuzz_path=payload.get("oss_fuzz_path") or None,
     )
 
 
@@ -31,12 +32,15 @@ def save_project_config(project: str, payload: dict) -> None:
 
 
 def build_runtime(config: ProjectConfig) -> ContainerRuntime:
+    oss_fuzz = Path(config.oss_fuzz_path) if config.oss_fuzz_path else None
     return ContainerRuntime(
         project=config.project,
         setup_dir=project_root(config.project) / "setup",
         target_dir=config.target_dir,
         secure_base_commit=config.secure_base_commit,
         workspace_dir=workspace_for_project(config.project),
+        oss_fuzz_path=oss_fuzz,
+        repos=config.repos,
     )
 
 

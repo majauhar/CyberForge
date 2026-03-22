@@ -1,19 +1,18 @@
-"""Selection strategy registry."""
-
-from __future__ import annotations
+"""Maps selection_strategy_id -> SelectionStrategy implementation."""
 
 from selector.base import SelectionStrategy
-from selector.vanilla_agent_v1.run import VanillaSelectionStrategy
+from selector.llm_explore.run import LLMExploreStrategy
+from selector.static_analysis.run import StaticAnalysisStrategy
 
-_REGISTRY: dict[str, type[SelectionStrategy]] = {
-    "vanilla_agent_v1": VanillaSelectionStrategy,
+SELECTOR_REGISTRY: dict[str, type[SelectionStrategy]] = {
+    "llm_explore": LLMExploreStrategy,
+    "static_analysis": StaticAnalysisStrategy,
 }
 
 
 def get_selection_strategy(strategy_id: str) -> SelectionStrategy:
-    try:
-        return _REGISTRY[strategy_id]()
-    except KeyError as exc:
-        valid = ", ".join(sorted(_REGISTRY))
-        raise ValueError(f"Unknown selection strategy '{strategy_id}'. Valid: {valid}") from exc
-
+    cls = SELECTOR_REGISTRY.get(strategy_id)
+    if cls is None:
+        available = list(SELECTOR_REGISTRY.keys())
+        raise ValueError(f"Unknown selection strategy {strategy_id!r}. Available: {available}")
+    return cls()

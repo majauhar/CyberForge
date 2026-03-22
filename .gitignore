@@ -421,3 +421,21 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# VulInjector runtime outputs
+test_results/
+results/
+vuljector-projects/
+
+# Claude Code local session state
+.claude/
+
+# Local test / dev scripts (not part of the distributed tool)
+test_pipeline.sh
+batch_analyze.py
+MIGRATION.md
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+src/.env

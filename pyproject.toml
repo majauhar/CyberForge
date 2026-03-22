@@ -1,0 +1,60 @@
+[project]
+name = "vuljector"
+version = "0.2.0"
+description = "Structural vulnerability injection for synthetic security dataset creation"
+readme = "MIGRATION.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.3.1",
+    # Agent layer — mini-swe-agent v2+ required (v1 has incompatible imports)
+    "mini-swe-agent>=2.0.0",
+    "litellm>=1.0.0",
+    # Container management
+    "docker>=6.0.0",
+]
+
+[project.scripts]
+# After `uv pip install -e .`, run as: vuljector setup flask
+vuljector = "vuljector.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# src-layout: all packages live under src/
+packages = [
+    "src/injector",
+    "src/selector",
+    "src/setup",
+    "src/utils",
+    "src/verifier",
+    "src/vuljector",
+]
+
+[dependency-groups]
+dev = []
+
+# ── Notes ────────────────────────────────────────────────────────────────────
+#
+# Install (editable):
+#   uv pip install -e .
+#
+# Run the test script (no install needed — test_pipeline.py adds src/ to PYTHONPATH):
+#   uv run test_pipeline.py flask
+#
+# Run the CLI (requires install or PYTHONPATH=src):
+#   PYTHONPATH=src python -m vuljector.cli setup flask
+#
+# API keys go in src/.env (gitignored):
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   OPENAI_API_KEY=sk-...        # for openai/ models
+#   OPENAI_API_BASE=...          # for custom OpenAI-compatible endpoints
+#   RCHAT_OSS_API_BASE=...       # RCHAT proxy
+#   RCHAT_OSS_API_KEY=...
+#
+# OSS-Fuzz setup (required for container image builds):
+#   git clone https://github.com/google/oss-fuzz
+#   cd oss-fuzz && python3 infra/helper.py build_image <project>
+#   # ContainerRuntime will use docker build from project's setup/ dir.
+#   # For OSS-Fuzz projects, configure project.json with the pre-built image tag.

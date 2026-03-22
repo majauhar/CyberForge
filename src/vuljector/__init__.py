@@ -1,7 +1,7 @@
-"""Vuljector V2 phase runners."""
+"""Vuljector V2 phase runners.
 
-from .run_injection import run_injection
-from .run_selection import run_selection
-from .run_setup import run_setup
-
-__all__ = ["run_setup", "run_selection", "run_injection"]
+Import runners directly to avoid circular imports:
+  from vuljector.run_setup import run_setup
+  from vuljector.run_selection import run_selection
+  from vuljector.run_injection import run_injection
+"""

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from selector.base import SelectionRequest
 from selector.registry import get_selection_strategy
-from setup.lifecycle import finish_phase, start_phase
-from utils.github_utils import remove_git_dir
 from utils.json_io import write_json
 from utils.paths import new_run_id, selection_run_dir
 from vuljector.core import build_runtime, ensure_setup_completed, load_project_config
 from vuljector.io_contracts import utc_now_iso
+
+
+_DEFAULT_MAX_CANDIDATES = 30
 
 
 def run_selection(
@@ -19,10 +20,13 @@ def run_selection(
     model_id: str,
     cwe_groups: list[str] | None = None,
     cwe_ids: list[str] | None = None,
+    max_candidates: int | None = None,
 ) -> dict:
     config = load_project_config(project)
     runtime = build_runtime(config)
     ensure_setup_completed(runtime, project)
+
+    _max = max_candidates if max_candidates is not None else _DEFAULT_MAX_CANDIDATES
 
     run_id = new_run_id("selection")
     run_dir = selection_run_dir(project, run_id)
@@ -34,30 +38,26 @@ def run_selection(
         "selection_strategy_id": strategy_id,
         "model_id": model_id,
         "filters": {"cwe_groups": cwe_groups or [], "cwe_ids": cwe_ids or []},
-        "max_candidates": 30,
+        "max_candidates": _max,
     }
     write_json(run_dir / "selection_request.json", request_payload)
 
-    start_phase(runtime, phase="selection", run_dir=run_dir)
-    try:
-        remove_git_dir(runtime, runtime.repo_dir_in_container)
-        strategy = get_selection_strategy(strategy_id)
-        if not runtime.is_strategy_setup_done(phase="selection", strategy_id=strategy.id):
-            strategy.setup(runtime)
-            runtime.mark_strategy_setup_done(phase="selection", strategy_id=strategy.id)
-        request = SelectionRequest(
-            project=project,
-            run_id=run_id,
-            strategy_id=strategy_id,
-            model_id=model_id,
-            cwe_groups=cwe_groups,
-            cwe_ids=cwe_ids,
-        )
-        result = strategy.run(runtime, request)
-        payload = result.to_dict()
-        write_json(run_dir / "candidates.json", payload)
-        (run_dir / "selection_log.txt").write_text("selection completed\n", encoding="utf-8")
-        return payload
-    finally:
-        finish_phase(runtime)
-
+    strategy = get_selection_strategy(strategy_id)
+    # setup() clones the repo locally if not already present — idempotent.
+    strategy.setup(runtime)
+    request = SelectionRequest(
+        project=project,
+        run_id=run_id,
+        strategy_id=strategy_id,
+        model_id=model_id,
+        cwe_groups=cwe_groups,
+        cwe_ids=cwe_ids,
+        target_dir=config.target_dir,
+        max_candidates=_max,
+        filters={"cwe_groups": cwe_groups or [], "cwe_ids": cwe_ids or []},
+    )
+    result = strategy.run(runtime, request)
+    payload = result.to_dict()
+    write_json(run_dir / "candidates.json", payload)
+    (run_dir / "selection_log.txt").write_text("selection completed\n", encoding="utf-8")
+    return payload

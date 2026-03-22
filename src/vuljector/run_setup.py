@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import base64
+import logging
 import re
+import subprocess
 
-from setup.lifecycle import finish_phase, start_phase
-from utils.github_utils import backup_git_dir, remove_git_dir
+from utils.agent import AgentRequest, run_agent_task
+from utils.agent.prompts import SECURITY_SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
 from utils.json_io import read_json, write_json
 from utils.paths import new_run_id, project_root, setup_run_dir
 from vuljector.core import build_runtime, load_project_config, save_project_config
 from vuljector.io_contracts import utc_now_iso
 
+logger = logging.getLogger(__name__)
 
-def run_setup(project: str) -> dict:
+
+def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
     config = load_project_config(project)
     run_id = new_run_id("setup")
     run_dir = setup_run_dir(project, run_id)
@@ -25,22 +30,19 @@ def run_setup(project: str) -> dict:
     write_json(run_dir / "setup_request.json", request)
 
     runtime = build_runtime(config)
-    start_phase(runtime, phase="setup", run_dir=run_dir)
+    # Ensure the Docker image exists before issuing docker run commands.
+    runtime.ensure_image()
+
     try:
-        # Initial baseline reset to secure commit while .git is still present.
-        if config.secure_base_commit:
-            runtime.exec(
-                f"git reset --hard {config.secure_base_commit}",
-                workdir=runtime.repo_dir_in_container,
-            ).raise_for_status("setup git reset failed")
-        runtime.exec("git clean -fdx", workdir=runtime.repo_dir_in_container).raise_for_status(
-            "setup git clean failed"
-        )
+        # Auto-detect secure_base_commit and main_repo from the image if not set.
+        _ensure_project_config(project, config, runtime)
+        # Reload config so subsequent code sees the updated values.
+        config = load_project_config(project)
+        runtime.secure_base_commit = config.secure_base_commit
+        runtime.repos = config.repos
 
-        git_backup_dir = runtime.workspace_dir / ".git_backup"
-        backup_git_dir(runtime, runtime.repo_dir_in_container, git_backup_dir)
-        remove_git_dir(runtime, runtime.repo_dir_in_container)
-
+        # Discover test harness if not already present, then run baseline.
+        _ensure_test_harness(runtime, project, run_dir, model_id)
         expected_count, unit_tests_enabled = _baseline_unit_tests(runtime, project)
         _persist_expected_count(project, expected_count, unit_tests_enabled)
 
@@ -51,9 +53,7 @@ def run_setup(project: str) -> dict:
             "run_id": run_id,
             "timestamp_utc": utc_now_iso(),
             "status": "success",
-            "container_id": runtime.meta.get("container_id", ""),
             "secure_base_commit": config.secure_base_commit,
-            "git_backup_dir": f"runs/workspaces/{project}/.git_backup",
             "unit_tests": {
                 "enabled": unit_tests_enabled,
                 "expected_passing_count": expected_count,
@@ -62,26 +62,198 @@ def run_setup(project: str) -> dict:
         write_json(run_dir / "setup_result.json", result)
         (run_dir / "setup_log.txt").write_text("setup completed\n", encoding="utf-8")
         return result
-    finally:
-        finish_phase(runtime)
+    except Exception:
+        raise
+
+
+def _ensure_test_harness(runtime, project: str, run_dir, model_id: str) -> None:
+    """Run test-discovery agent if no test.sh exists for the project."""
+    proj_root = project_root(project)
+    script_host = proj_root / "unit_tests" / "test.sh"
+    if script_host.exists():
+        return  # Already discovered in a previous run.
+
+    logger.info("[%s] No test harness found — running test discovery agent.", project)
+
+    # Derive src_dir: the directory inside /src/ that contains the project source.
+    src_dir = runtime.target_dir or project
+
+    trajectory_path = str(run_dir / "logs" / "test_discovery_trajectory.json")
+    agent_req = AgentRequest(
+        model_id=model_id,
+        prompt=TEST_DISCOVERY_TASK.format(project=project, src_dir=src_dir),
+        workdir=runtime.repo_dir_in_container,
+        system_template=SECURITY_SYSTEM_TEMPLATE,
+        step_limit=30,
+        cost_limit=1.0,
+        setup_commands=["bash /src/build.sh 2>&1 | tail -30 || true"],
+        extract_paths=["/tmp/test_harness.sh", "/tmp/baseline_output.txt"],
+        post_commands=[
+            "bash /tmp/test_harness.sh > /tmp/harness_out.txt 2>&1"
+            "; echo HARNESS_EXIT:$?; tail -20 /tmp/harness_out.txt",
+        ],
+        trajectory_path=trajectory_path,
+    )
+
+    resp = run_agent_task(runtime, agent_req)
+    harness_script = resp.extracted_files.get("/tmp/test_harness.sh", "").strip()
+
+    if not harness_script:
+        raise RuntimeError(
+            f"[{project}] Test discovery agent did not produce /tmp/test_harness.sh. "
+            f"Agent exit_status={resp.exit_status!r}. Check trajectory at {trajectory_path}"
+        )
+
+    # Check harness passed (HARNESS_EXIT:0 in post-command output).
+    harness_passed = False
+    for pr in resp.post_results:
+        output = pr.get("output", "")
+        m = re.search(r"HARNESS_EXIT:(\d+)", output)
+        if m:
+            harness_passed = (int(m.group(1)) == 0)
+
+    if not harness_passed:
+        logger.warning(
+            "[%s] Test discovery harness did not pass (non-zero exit) — saving anyway for review.",
+            project,
+        )
+
+    script_host.parent.mkdir(parents=True, exist_ok=True)
+    script_host.write_text(harness_script, encoding="utf-8")
+    logger.info("[%s] Test harness saved to %s (passed=%s).", project, script_host, harness_passed)
 
 
 def _baseline_unit_tests(runtime, project: str) -> tuple[int | None, bool]:
+    """Run the test harness in a fresh container and return (passing_count, enabled)."""
     proj_root = project_root(project)
     script_host = proj_root / "unit_tests" / "test.sh"
     if not script_host.exists():
         return None, False
-    runtime.exec("mkdir -p /workspace/run/unit_tests").raise_for_status("mkdir run/unit_tests failed")
-    runtime.copy_to(script_host, "/workspace/run/unit_tests/test.sh")
-    runtime.exec("chmod +x /workspace/run/unit_tests/test.sh").raise_for_status("chmod test script failed")
-    result = runtime.exec("bash /workspace/run/unit_tests/test.sh", workdir=runtime.repo_dir_in_container)
+
+    # Encode the harness script as base64 and install it inside a fresh container.
+    harness = script_host.read_text(encoding="utf-8")
+    encoded = base64.b64encode(harness.encode()).decode()
+    cmd = (
+        f"echo '{encoded}' | base64 -d > /tmp/test_harness.sh && "
+        f"chmod +x /tmp/test_harness.sh && "
+        f"cd {runtime.repo_dir_in_container} && bash /tmp/test_harness.sh"
+    )
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", runtime.image_tag, "bash", "-c", cmd],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("[%s] Baseline unit test run timed out.", project)
+        return 0, True
+
     out = (result.stdout or "") + "\n" + (result.stderr or "")
     match = re.search(r"PASSING_TESTS\s*=\s*(\d+)", out)
+    if match:
+        return int(match.group(1)), True
+    match = re.search(r"(\d+)\s+passed", out)
     if match:
         return int(match.group(1)), True
     if result.returncode == 0:
         return 1, True
     return 0, True
+
+
+def _backup_git_from_image(runtime) -> None:
+    """
+    Backup the .git directory from the Docker image to the host.
+
+    Uses `docker create` (no running container) + `docker cp` to extract .git.
+    The backup is used by the injection/verifier phase to reset to the secure
+    base commit between vulnerability attempts.
+    """
+    import shutil
+    git_backup_dir = runtime.workspace_dir / ".git_backup"
+    if git_backup_dir.exists():
+        logger.info("[%s] .git backup already exists at %s — skipping.", runtime.project, git_backup_dir)
+        return
+
+    logger.info("[%s] Backing up .git from image %s ...", runtime.project, runtime.image_tag)
+    # Create a stopped container (no `docker run`, just `docker create`).
+    create_result = subprocess.run(
+        ["docker", "create", runtime.image_tag],
+        capture_output=True, text=True,
+    )
+    if create_result.returncode != 0:
+        raise RuntimeError(
+            f"docker create failed while backing up .git: {create_result.stderr.strip()}"
+        )
+    container_id = create_result.stdout.strip()
+    try:
+        git_backup_dir.parent.mkdir(parents=True, exist_ok=True)
+        # docker cp copies the directory itself — destination should be the parent.
+        cp_result = subprocess.run(
+            ["docker", "cp",
+             f"{container_id}:{runtime.repo_dir_in_container}/.git",
+             str(git_backup_dir)],
+            capture_output=True, text=True,
+        )
+        if cp_result.returncode != 0:
+            raise RuntimeError(
+                f"docker cp .git failed: {cp_result.stderr.strip()}"
+            )
+    except Exception:
+        if git_backup_dir.exists():
+            shutil.rmtree(git_backup_dir)
+        raise
+    finally:
+        subprocess.run(["docker", "rm", container_id], capture_output=True, text=True)
+
+    logger.info("[%s] .git backed up to %s.", runtime.project, git_backup_dir)
+
+
+def _ensure_project_config(project: str, config, runtime) -> None:
+    """
+    If secure_base_commit or repos[target_dir] are missing, detect them now
+    by running a one-shot container (no persistent container required).
+    """
+    cfg_path = project_root(project) / "project.json"
+    payload = read_json(cfg_path)
+    changed = False
+
+    # 1. Auto-detect secure_base_commit from the image.
+    if not payload.get("secure_base_commit"):
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", runtime.image_tag,
+                "git", "-C", runtime.repo_dir_in_container, "rev-parse", "HEAD",
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            commit = result.stdout.strip()
+            payload["secure_base_commit"] = commit
+            logger.info("[%s] Detected secure_base_commit from image: %s", project, commit)
+            changed = True
+        else:
+            logger.warning("[%s] Could not detect commit from image: %s", project, result.stderr.strip())
+
+    # 2. Auto-detect main_repo URL from OSS-Fuzz project.yaml.
+    repos = payload.get("repos") or {}
+    if not repos.get(config.target_dir) and config.oss_fuzz_path:
+        import pathlib
+        proj_yaml = (
+            pathlib.Path(config.oss_fuzz_path)
+            / "projects" / project / "project.yaml"
+        )
+        if proj_yaml.exists():
+            for line in proj_yaml.read_text().splitlines():
+                if line.strip().startswith("main_repo:"):
+                    url = line.split("main_repo:", 1)[1].strip().strip('"').strip("'")
+                    if url:
+                        repos[config.target_dir] = url
+                        payload["repos"] = repos
+                        logger.info("[%s] Detected main_repo from project.yaml: %s", project, url)
+                        changed = True
+                    break
+
+    if changed:
+        write_json(cfg_path, payload)
 
 
 def _persist_expected_count(project: str, expected_count: int | None, enabled: bool) -> None:
@@ -96,4 +268,3 @@ def _persist_expected_count(project: str, expected_count: int | None, enabled: b
         "expected_passing_count": expected_count,
     }
     save_project_config(project, payload)
-

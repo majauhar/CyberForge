@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from setup.container_runtime import ContainerRuntime
 from vuljector.io_contracts import SelectionResult
@@ -17,6 +17,9 @@ class SelectionRequest:
     model_id: str
     cwe_groups: list[str] | None
     cwe_ids: list[str] | None
+    target_dir: str = ""
+    max_candidates: int = 30
+    filters: dict = field(default_factory=dict)
 
 
 class SelectionStrategy(ABC):

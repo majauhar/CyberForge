@@ -17,6 +17,9 @@ class InjectionRequest:
     model_id: str
     num_vulnerabilities: int
     debug: bool
+    # Relative sub-path within run_mount for this attempt's artifacts
+    # (e.g. "attempt_00"). Empty string means root of run_mount.
+    attempt_dir: str = ""
 
 
 class InjectionStrategy(ABC):
