@@ -1,0 +1,18 @@
+"""Maps selection_strategy_id -> SelectionStrategy implementation."""
+
+from selector.base import SelectionStrategy
+from selector.llm_explore.run import LLMExploreStrategy
+from selector.static_analysis.run import StaticAnalysisStrategy
+
+SELECTOR_REGISTRY: dict[str, type[SelectionStrategy]] = {
+    "llm_explore": LLMExploreStrategy,
+    "static_analysis": StaticAnalysisStrategy,
+}
+
+
+def get_selection_strategy(strategy_id: str) -> SelectionStrategy:
+    cls = SELECTOR_REGISTRY.get(strategy_id)
+    if cls is None:
+        available = list(SELECTOR_REGISTRY.keys())
+        raise ValueError(f"Unknown selection strategy {strategy_id!r}. Available: {available}")
+    return cls()
