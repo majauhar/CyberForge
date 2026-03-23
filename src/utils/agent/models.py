@@ -11,11 +11,7 @@ class AgentRequest:
     prompt: str
     workdir: str
     system_template: str = "You are a software engineer. Be concise."
-    instance_template: str = (
-        "Task: {{task}}\n"
-        "Return the final answer directly in your last message.\n"
-        "If STRICT JSON is requested, answer with STRICT JSON only."
-    )
+    instance_template: str = "{{task}}"
     step_limit: int = 30
     cost_limit: float = 1.0
     setup_commands: list[str] = field(default_factory=list)

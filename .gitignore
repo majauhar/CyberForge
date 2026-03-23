@@ -432,6 +432,7 @@ vuljector-projects/
 
 # Local test / dev scripts (not part of the distributed tool)
 test_pipeline.sh
+test_ready_image.sh
 batch_analyze.py
 MIGRATION.md
 

@@ -8,7 +8,7 @@ import re
 import subprocess
 
 from utils.agent import AgentRequest, run_agent_task
-from utils.agent.prompts import SECURITY_SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
+from utils.agent.prompts import SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
 from utils.json_io import read_json, write_json
 from utils.paths import new_run_id, project_root, setup_run_dir
 from vuljector.core import build_runtime, load_project_config, save_project_config
@@ -47,6 +47,20 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
         _persist_expected_count(project, expected_count, unit_tests_enabled)
 
         runtime.mark_setup_completed(True)
+
+        # Build ready image: commits post-build.sh container state so future
+        # selection/injection agent runs skip the full build step.
+        # Skipped automatically if a ready image for this setup hash already exists.
+        if runtime.has_ready_image():
+            logger.info("[%s] Ready image already up-to-date: %s", project, runtime.ready_image_tag)
+        else:
+            logger.info("[%s] Building ready image with pre-compiled artifacts ...", project)
+            try:
+                runtime.build_ready_image()
+                logger.info("[%s] Ready image built: %s", project, runtime.ready_image_tag)
+            except Exception as exc:
+                logger.warning("[%s] Ready image build failed (non-fatal): %s", project, exc)
+
         result = {
             "schema_version": "v2",
             "project": project,
@@ -83,7 +97,7 @@ def _ensure_test_harness(runtime, project: str, run_dir, model_id: str) -> None:
         model_id=model_id,
         prompt=TEST_DISCOVERY_TASK.format(project=project, src_dir=src_dir),
         workdir=runtime.repo_dir_in_container,
-        system_template=SECURITY_SYSTEM_TEMPLATE,
+        system_template=SYSTEM_TEMPLATE,
         step_limit=30,
         cost_limit=1.0,
         setup_commands=["bash /src/build.sh 2>&1 | tail -30 || true"],

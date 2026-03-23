@@ -31,7 +31,7 @@ from setup.container_runtime import ContainerRuntime
 from utils.agent import AgentRequest, run_agent_task
 from utils.paths import project_root
 from utils.agent.prompts import (
-    SECURITY_SYSTEM_TEMPLATE,
+    SYSTEM_TEMPLATE,
     VULN_INJECT_TASK,
     build_harness_note,
 )
@@ -306,7 +306,7 @@ class LLMInjectStrategy(InjectionStrategy):
             model_id=request.model_id,
             prompt=task_prompt,
             workdir=runtime.repo_dir_in_container,
-            system_template=SECURITY_SYSTEM_TEMPLATE,
+            system_template=SYSTEM_TEMPLATE,
             step_limit=20,
             cost_limit=2.0,
             setup_commands=setup_commands,

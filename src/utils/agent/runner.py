@@ -46,13 +46,15 @@ def run_agent_task(
 
     docker_env = None
     try:
+        active_image = runtime.active_image_tag
         docker_env = DockerEnvironment(
-            image=runtime.image_tag,
+            image=active_image,
             cwd=request.workdir,
             env=env,
             timeout=120,
         )
-        logging.info("[%s] Container started from %s", runtime.project, runtime.image_tag)
+        logging.info("[%s] Container started from %s%s", runtime.project, active_image,
+                     " (ready image)" if active_image != runtime.image_tag else "")
 
         # ── Pre-agent setup commands (e.g. build.sh) ─────────────────────────
         for cmd in request.setup_commands:

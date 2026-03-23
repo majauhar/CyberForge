@@ -61,6 +61,67 @@ class ContainerRuntime:
         self.container_name = ""
         self.run_mount_dir: Path | None = None
 
+    @property
+    def ready_image_tag(self) -> str:
+        """Tag for the post-build cached image (has build.sh artifacts baked in)."""
+        return f"vuljector/{self.project}:{self.setup_hash[:12]}-ready"
+
+    def has_ready_image(self) -> bool:
+        """True if a ready image exists and matches the current setup hash."""
+        return (
+            self.meta.get("ready_hash") == self.setup_hash
+            and self._image_exists(self.ready_image_tag)
+        )
+
+    @property
+    def active_image_tag(self) -> str:
+        """Ready image if available, otherwise the base project image."""
+        return self.ready_image_tag if self.has_ready_image() else self.image_tag
+
+    def build_ready_image(self) -> None:
+        """
+        Spin up a container from the base image, run build.sh, then docker commit
+        the result as a reusable 'ready' image.  Subsequent agent runs start from
+        this image so build.sh is a near no-op (artifacts already cached).
+
+        No-op if a ready image for the current setup hash already exists.
+        """
+        if self.has_ready_image():
+            return
+        import uuid
+        tag = self.ready_image_tag
+        container_name = f"vuljector-{self.project}-ready-{uuid.uuid4().hex[:8]}"
+        try:
+            start = subprocess.run(
+                ["docker", "run", "-d", "--name", container_name, self.image_tag,
+                 "sleep", "infinity"],
+                capture_output=True, text=True,
+            )
+            if start.returncode != 0:
+                raise RuntimeError(
+                    f"docker run for ready image failed: {(start.stderr or start.stdout).strip()}"
+                )
+            # Pre-run build.sh so artifacts are baked into the committed image.
+            subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 "bash /src/build.sh 2>&1 | tail -30 || true"],
+                capture_output=True, text=True, timeout=600,
+            )
+            commit = subprocess.run(
+                ["docker", "commit", container_name, tag],
+                capture_output=True, text=True,
+            )
+            if commit.returncode != 0:
+                raise RuntimeError(
+                    f"docker commit failed: {(commit.stderr or commit.stdout).strip()}"
+                )
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name],
+                           capture_output=True, text=True)
+        self.meta["ready_hash"] = self.setup_hash
+        self.meta["ready_image_tag"] = tag
+        self._save_meta()
+
     def ensure_image(self) -> None:
         if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(self.image_tag):
             self._build_image(self.image_tag)
