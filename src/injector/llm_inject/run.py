@@ -377,7 +377,6 @@ class LLMInjectStrategy(InjectionStrategy):
                 failure_msg = "Agent did not produce /tmp/vuln.patch"
             logger.warning("[%s] llm_inject FAILED: %s", request.project, failure_msg)
             return InjectionResult(
-                schema_version="v2",
                 project=request.project,
                 run_id=request.run_id,
                 timestamp_utc=utc_now_iso(),
@@ -410,7 +409,6 @@ class LLMInjectStrategy(InjectionStrategy):
             harness_passed, attack_triggered,
         )
         return InjectionResult(
-            schema_version="v2",
             project=request.project,
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),

@@ -22,7 +22,6 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
     run_id = new_run_id("setup")
     run_dir = setup_run_dir(project, run_id)
     request = {
-        "schema_version": "v2",
         "project": project,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
@@ -35,7 +34,7 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
 
     try:
         # Auto-detect secure_base_commit and main_repo from the image if not set.
-        _ensure_project_config(project, config, runtime)
+        _ensure_project_config(project, runtime)
         # Reload config so subsequent code sees the updated values.
         config = load_project_config(project)
         runtime.secure_base_commit = config.secure_base_commit
@@ -62,7 +61,6 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
                 logger.warning("[%s] Ready image build failed (non-fatal): %s", project, exc)
 
         result = {
-            "schema_version": "v2",
             "project": project,
             "run_id": run_id,
             "timestamp_utc": utc_now_iso(),
@@ -221,10 +219,10 @@ def _backup_git_from_image(runtime) -> None:
     logger.info("[%s] .git backed up to %s.", runtime.project, git_backup_dir)
 
 
-def _ensure_project_config(project: str, config, runtime) -> None:
+def _ensure_project_config(project: str, runtime) -> None:
     """
-    If secure_base_commit or repos[target_dir] are missing, detect them now
-    by running a one-shot container (no persistent container required).
+    If secure_base_commit is missing, detect it from the image via a one-shot
+    container run (no persistent container required).
     """
     cfg_path = project_root(project) / "project.json"
     payload = read_json(cfg_path)
@@ -246,25 +244,6 @@ def _ensure_project_config(project: str, config, runtime) -> None:
             changed = True
         else:
             logger.warning("[%s] Could not detect commit from image: %s", project, result.stderr.strip())
-
-    # 2. Auto-detect main_repo URL from OSS-Fuzz project.yaml.
-    repos = payload.get("repos") or {}
-    if not repos.get(config.target_dir) and config.oss_fuzz_path:
-        import pathlib
-        proj_yaml = (
-            pathlib.Path(config.oss_fuzz_path)
-            / "projects" / project / "project.yaml"
-        )
-        if proj_yaml.exists():
-            for line in proj_yaml.read_text().splitlines():
-                if line.strip().startswith("main_repo:"):
-                    url = line.split("main_repo:", 1)[1].strip().strip('"').strip("'")
-                    if url:
-                        repos[config.target_dir] = url
-                        payload["repos"] = repos
-                        logger.info("[%s] Detected main_repo from project.yaml: %s", project, url)
-                        changed = True
-                    break
 
     if changed:
         write_json(cfg_path, payload)

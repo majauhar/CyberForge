@@ -15,15 +15,18 @@ def load_project_config(project: str) -> ProjectConfig:
     if not cfg_path.exists():
         raise FileNotFoundError(f"Missing project.json: {cfg_path}")
     payload = read_json(cfg_path)
+    target_dir = str(payload["target_dir"])
+    main_repo_url = str(payload.get("main_repo_url", "")).strip()
+    if not main_repo_url:
+        raise ValueError(f"Missing main_repo_url in project.json: {cfg_path}")
+    repos = {target_dir: main_repo_url}
     return ProjectConfig(
-        schema_version=str(payload.get("schema_version", "v2")),
         project=project,
-        target_dir=str(payload["target_dir"]),
+        target_dir=target_dir,
         secure_base_commit=str(payload.get("secure_base_commit", "")),
-        repos=dict(payload.get("repos", {})),
+        repos=repos,
         source=dict(payload.get("source", {})),
         unit_tests=payload.get("unit_tests"),
-        oss_fuzz_path=payload.get("oss_fuzz_path") or None,
     )
 
 
@@ -32,14 +35,12 @@ def save_project_config(project: str, payload: dict) -> None:
 
 
 def build_runtime(config: ProjectConfig) -> ContainerRuntime:
-    oss_fuzz = Path(config.oss_fuzz_path) if config.oss_fuzz_path else None
     return ContainerRuntime(
         project=config.project,
         setup_dir=project_root(config.project) / "setup",
         target_dir=config.target_dir,
         secure_base_commit=config.secure_base_commit,
         workspace_dir=workspace_for_project(config.project),
-        oss_fuzz_path=oss_fuzz,
         repos=config.repos,
     )
 

@@ -41,7 +41,7 @@ class StaticAnalysisStrategy(SelectionStrategy):
         url = (getattr(runtime, "repos", {}) or {}).get(runtime.target_dir, "")
         if not url:
             logger.warning(
-                "[%s] No repo URL found in runtime.repos for target_dir=%r — "
+                "[%s] No repo URL for target_dir=%r (set main_repo_url in project.json) — "
                 "static analysis may fail if source is not already on host.",
                 runtime.project, runtime.target_dir,
             )
@@ -88,7 +88,6 @@ class StaticAnalysisStrategy(SelectionStrategy):
             ]
 
         return SelectionResult(
-            schema_version="v2",
             project=request.project,
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),
@@ -125,7 +124,7 @@ def _resolve_repo_path(runtime: ContainerRuntime, request: Any) -> Path:
 
     raise RuntimeError(
         f"Cannot resolve repo path for target_dir={target_dir!r}. "
-        "Ensure repos[target_dir] is set in project.json so the source can be cloned."
+        "Ensure main_repo_url in project.json so the source can be cloned."
     )
 
 

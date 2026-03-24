@@ -13,16 +13,12 @@ def utc_now_iso() -> str:
 
 @dataclass
 class ProjectConfig:
-    schema_version: str
     project: str
     target_dir: str
     secure_base_commit: str
     repos: dict[str, str]
     source: dict[str, str]
     unit_tests: dict[str, Any] | None = None
-    # Path to OSS-Fuzz clone. When set, image is built via
-    # `infra/helper.py build_image` and tagged as gcr.io/oss-fuzz/<project>.
-    oss_fuzz_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -92,7 +88,6 @@ class SelectionCandidate:
 
 @dataclass
 class SelectionResult:
-    schema_version: str
     project: str
     run_id: str
     timestamp_utc: str
@@ -107,7 +102,6 @@ class SelectionResult:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SelectionResult":
         return cls(
-            schema_version=d.get("schema_version", "v2"),
             project=d["project"],
             run_id=d["run_id"],
             timestamp_utc=d.get("timestamp_utc", ""),
@@ -118,7 +112,6 @@ class SelectionResult:
 
 @dataclass
 class InjectionResult:
-    schema_version: str
     project: str
     run_id: str
     timestamp_utc: str
@@ -140,7 +133,6 @@ class InjectionResult:
 
 @dataclass
 class VerificationResult:
-    schema_version: str
     project: str
     run_id: str
     timestamp_utc: str
@@ -168,7 +160,6 @@ class SnapshotFile:
 
 @dataclass
 class SnapshotManifest:
-    schema_version: str
     project: str
     vulnerability_id: str
     files: list[SnapshotFile] = field(default_factory=list)

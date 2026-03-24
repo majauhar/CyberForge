@@ -44,7 +44,6 @@ def run_injection(
     run_id = new_run_id("injection")
     run_dir = injection_run_dir(project, run_id)
     request_payload = {
-        "schema_version": "v2",
         "project": project,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
@@ -156,7 +155,6 @@ def run_injection(
                 )
             else:
                 verification_result = VerificationResult(
-                    schema_version="v2",
                     project=project,
                     run_id=run_id,
                     timestamp_utc=utc_now_iso(),
@@ -216,7 +214,6 @@ def run_injection(
 
         # Final summary written once after all attempts.
         payload = {
-            "schema_version": "v2",
             "project": project,
             "run_id": run_id,
             "num_vulnerabilities_requested": num_vulnerabilities,
@@ -322,7 +319,6 @@ def _write_vulnerability_metadata(
         for f in manifest.get("files", [])
     ]
     payload = {
-        "schema_version": "v2",
         "id": vulnerability_id,
         "project": project,
         "cwe_group": cwe_group,
