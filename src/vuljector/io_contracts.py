@@ -16,7 +16,7 @@ class ProjectConfig:
     project: str
     target_dir: str
     secure_base_commit: str
-    repos: dict[str, str]
+    main_repo_url: str
     source: dict[str, str]
     unit_tests: dict[str, Any] | None = None
 

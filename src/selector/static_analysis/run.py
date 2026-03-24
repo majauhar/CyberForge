@@ -38,7 +38,7 @@ class StaticAnalysisStrategy(SelectionStrategy):
 
     def setup(self, runtime: ContainerRuntime) -> None:
         """Clone the project source locally so static analysis can run on the host."""
-        url = (getattr(runtime, "repos", {}) or {}).get(runtime.target_dir, "")
+        url = (getattr(runtime, "main_repo_url", "") or "").strip()
         if not url:
             logger.warning(
                 "[%s] No repo URL for target_dir=%r (set main_repo_url in project.json) — "
@@ -102,7 +102,7 @@ def _resolve_repo_path(runtime: ContainerRuntime, request: Any) -> Path:
 
     Source lives inside the Docker image at /src/<target_dir> and is not
     volume-mounted. We clone it locally into workspace_dir/<target_dir> using
-    the URL from runtime.repos, then checkout secure_base_commit.
+    runtime.main_repo_url, then checkout secure_base_commit.
     """
     target_dir = getattr(request, "target_dir", None) or getattr(runtime, "target_dir", None) or ""
     workspace = getattr(runtime, "workspace_dir", None)
@@ -111,7 +111,7 @@ def _resolve_repo_path(runtime: ContainerRuntime, request: Any) -> Path:
         candidate = Path(workspace) / target_dir
         if not candidate.is_dir():
             # Clone lazily — safe to call even if is_strategy_setup_done skipped setup().
-            url = (getattr(runtime, "repos", {}) or {}).get(target_dir, "")
+            url = (getattr(runtime, "main_repo_url", "") or "").strip()
             if url:
                 logger.info("[%s] Cloning %s → %s", runtime.project, url, candidate)
                 subprocess.run(["git", "clone", url, str(candidate)], check=True)

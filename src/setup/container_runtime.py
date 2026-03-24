@@ -33,14 +33,14 @@ class ContainerRuntime:
         target_dir: str,
         secure_base_commit: str,
         workspace_dir: Path,
-        repos: dict | None = None,
+        main_repo_url: str = "",
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
         self.target_dir = target_dir
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
-        self.repos: dict = repos or {}
+        self.main_repo_url = main_repo_url
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()

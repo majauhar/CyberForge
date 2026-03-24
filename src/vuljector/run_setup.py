@@ -11,7 +11,12 @@ from utils.agent import AgentRequest, run_agent_task
 from utils.agent.prompts import SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
 from utils.json_io import read_json, write_json
 from utils.paths import new_run_id, project_root, setup_run_dir
-from vuljector.core import build_runtime, load_project_config, save_project_config
+from vuljector.core import (
+    ProjectConfig,
+    build_runtime,
+    load_project_config,
+    save_project_config,
+)
 from vuljector.io_contracts import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -33,12 +38,10 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
     runtime.ensure_image()
 
     try:
-        # Auto-detect secure_base_commit and main_repo from the image if not set.
-        _ensure_project_config(project, runtime)
-        # Reload config so subsequent code sees the updated values.
-        config = load_project_config(project)
+        # Auto-detect secure_base_commit from the image if not set.
+        _extract_secure_base_commit(config, runtime)
         runtime.secure_base_commit = config.secure_base_commit
-        runtime.repos = config.repos
+        runtime.main_repo_url = config.main_repo_url
 
         # Discover test harness if not already present, then run baseline.
         _ensure_test_harness(runtime, project, run_dir, model_id)
@@ -219,17 +222,14 @@ def _backup_git_from_image(runtime) -> None:
     logger.info("[%s] .git backed up to %s.", runtime.project, git_backup_dir)
 
 
-def _ensure_project_config(project: str, runtime) -> None:
+def _extract_secure_base_commit(config: ProjectConfig, runtime) -> None:
     """
     If secure_base_commit is missing, detect it from the image via a one-shot
-    container run (no persistent container required).
+    container run (no persistent container required). Updates `config` and
+    project.json when detection succeeds.
     """
-    cfg_path = project_root(project) / "project.json"
-    payload = read_json(cfg_path)
-    changed = False
+    if not config.secure_base_commit:
 
-    # 1. Auto-detect secure_base_commit from the image.
-    if not payload.get("secure_base_commit"):
         result = subprocess.run(
             [
                 "docker", "run", "--rm", runtime.image_tag,
@@ -237,15 +237,16 @@ def _ensure_project_config(project: str, runtime) -> None:
             ],
             capture_output=True, text=True,
         )
-        if result.returncode == 0:
-            commit = result.stdout.strip()
-            payload["secure_base_commit"] = commit
-            logger.info("[%s] Detected secure_base_commit from image: %s", project, commit)
-            changed = True
-        else:
-            logger.warning("[%s] Could not detect commit from image: %s", project, result.stderr.strip())
+        if result.returncode != 0:
+            raise RuntimeError(f"[{config.project}] Could not detect commit from image: {result.stderr.strip()}")
+        
+        commit = result.stdout.strip()
+        config.secure_base_commit = commit
+        logger.info(f"[{config.project}] Detected secure_base_commit from image: {commit}")
 
-    if changed:
+        cfg_path = project_root(config.project) / "project.json"
+        payload = read_json(cfg_path)
+        payload["secure_base_commit"] = commit
         write_json(cfg_path, payload)
 
 

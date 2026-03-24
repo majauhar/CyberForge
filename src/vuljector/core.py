@@ -19,12 +19,11 @@ def load_project_config(project: str) -> ProjectConfig:
     main_repo_url = str(payload.get("main_repo_url", "")).strip()
     if not main_repo_url:
         raise ValueError(f"Missing main_repo_url in project.json: {cfg_path}")
-    repos = {target_dir: main_repo_url}
     return ProjectConfig(
         project=project,
         target_dir=target_dir,
         secure_base_commit=str(payload.get("secure_base_commit", "")),
-        repos=repos,
+        main_repo_url=main_repo_url,
         source=dict(payload.get("source", {})),
         unit_tests=payload.get("unit_tests"),
     )
@@ -41,7 +40,7 @@ def build_runtime(config: ProjectConfig) -> ContainerRuntime:
         target_dir=config.target_dir,
         secure_base_commit=config.secure_base_commit,
         workspace_dir=workspace_for_project(config.project),
-        repos=config.repos,
+        main_repo_url=config.main_repo_url,
     )
 
 
