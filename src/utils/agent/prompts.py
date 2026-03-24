@@ -1,4 +1,4 @@
-"""Agent prompt templates for VulInjector tasks (mini-swe-agent v2).
+"""Agent prompt templates for Vuljector tasks (mini-swe-agent v2).
 
 v2 formatting rules:
   - system_template   → Jinja2, supports {{system}} {{release}} {{machine}}

@@ -1,6 +1,6 @@
-# VulInjector
+# Vuljector
 
-Automated vulnerability injection for synthetic security dataset creation. VulInjector injects
+Automated vulnerability injection for synthetic security dataset creation. Vuljector injects
 semantically plausible vulnerabilities into real OSS-Fuzz projects and produces verified
 (exploit triggers + tests pass) dataset entries.
 

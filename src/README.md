@@ -15,7 +15,7 @@ Set up a workspace where these repositories are siblings:
 
 ```text
 Vuljector/
-  VulInjector/
+  Vuljector/
     src/
   oss-fuzz/
   vuljector-projects/
@@ -24,7 +24,7 @@ Vuljector/
 ```bash
 mkdir Vuljector
 cd Vuljector
-git clone https://github.com/AmL-Dev/VulInjector VulInjector
+git clone https://github.com/vuljector/Vuljector Vuljector
 git clone https://github.com/vuljector/oss-fuzz oss-fuzz
 git clone https://github.com/vuljector/vuljector-projects vuljector-projects
 ```
@@ -32,7 +32,7 @@ git clone https://github.com/vuljector/vuljector-projects vuljector-projects
 Then install dependencies:
 
 ```bash
-cd VulInjector/src
+cd Vuljector/src
 uv sync
 ```
 
@@ -58,7 +58,7 @@ This creates `vuljector-projects/<project>/` with:
 
 ## CLI usage
 
-Run commands from `VulInjector/src`:
+Run commands from `Vuljector/src`:
 
 ### Setup phase (must run first)
 
@@ -114,7 +114,7 @@ This runs `setup` if needed, then `selection`, then `injection`.
 ### Runs data
 
 ```text
-VulInjector/runs/
+Vuljector/runs/
 │
 ├── setup/<project>/<setup_run_id>/
 │   ├── setup_request.json
@@ -155,10 +155,10 @@ vuljector-projects/<project>/
 ## Environment variables (`.env`)
 
 Vuljector runs the agent on the host, but all actions execute inside the project container. The
-agent/model are configured via environment variables read from `VulInjector/src/.env` (and the
+agent/model are configured via environment variables read from `Vuljector/src/.env` (and the
 process environment).
 
-Create `VulInjector/src/.env` and set credentials for **one** provider you want to use:
+Create `Vuljector/src/.env` and set credentials for **one** provider you want to use:
 
 ### RChat OpenAI-compatible proxy (example)
 
@@ -195,7 +195,7 @@ These are mapped to the Azure env names used by litellm:
 ## Run via `uv run`
 
 All commands below are equivalent to `python3 -m ...`, but ensure you use the locked environment.
-Run them from `VulInjector/src`.
+Run them from `Vuljector/src`.
 
 ### Setup
 
@@ -235,7 +235,7 @@ Example:
 
 ```bash
 uv run -m vuljector.cli injection flask vanilla_agent_v1 "azure/gpt-5-nano" \
-  VulInjector/runs/selection/flask/<selection_run_id>/candidates.json \
+  Vuljector/runs/selection/flask/<selection_run_id>/candidates.json \
   --num-vulnerabilities 1 --debug
 ```
 

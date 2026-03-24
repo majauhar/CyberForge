@@ -70,10 +70,10 @@ Ordering constraint:
 
 ### What is mounted
 
-VulInjector source is not mounted into the project container.
+Vuljector source is not mounted into the project container.
 Only a per-run output directory is mounted (created empty for that run):
 
-- host `VulInjector/runs/(setup|selection|injection)/<project>/<run_id>/` -> container `/workspace/run/`
+- host `Vuljector/runs/(setup|selection|injection)/<project>/<run_id>/` -> container `/workspace/run/`
 
 Optional mounts can be added per strategy, but the baseline flow keeps this minimal.
 
@@ -90,7 +90,7 @@ Optional mounts can be added per strategy, but the baseline flow keeps this mini
 ```text
 Vuljector/
 │
-├── VulInjector/
+├── Vuljector/
 │   └── src/
 │       ├── vuljector/            # phase runners, CLI, shared plumbing
 │       ├── injector/             # injection strategies + interface
@@ -104,13 +104,13 @@ Vuljector/
 └── vuljector-projects/
 ```
 
-### `VulInjector/src` detailed blueprint
+### `Vuljector/src` detailed blueprint
 
 The tree above is the high-level view. This section defines the concrete scripts/modules and the
 core classes (including abstract interfaces).
 
 ```text
-VulInjector/src/
+Vuljector/src/
 │
 ├── vuljector/
 │   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, run
@@ -295,7 +295,7 @@ vuljector-projects/
 ## `runs/` Architecture
 
 ```text
-VulInjector/runs/
+Vuljector/runs/
 │
 ├── setup/
 │   └── <project>/

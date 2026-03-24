@@ -11,11 +11,11 @@ def src_root() -> Path:
 
 
 def workspace_root() -> Path:
-    # src/ is under VulInjector/, which is sibling of vuljector-projects/.
+    # src/ is under Vuljector/, which is sibling of vuljector-projects/.
     return src_root().parents[1]
 
 
-def vulinjector_root() -> Path:
+def vuljector_root() -> Path:
     return src_root().parents[0]
 
 
@@ -24,7 +24,7 @@ def projects_root() -> Path:
 
 
 def runs_root() -> Path:
-    return vulinjector_root() / "runs"
+    return vuljector_root() / "runs"
 
 
 def workspaces_root() -> Path:

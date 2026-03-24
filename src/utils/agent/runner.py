@@ -40,7 +40,7 @@ def run_agent_task(
             stdout="",
             stderr=(
                 "mini-swe-agent is not importable. "
-                f"Install it in VulInjector/src environment. Details: {exc}"
+                f"Install it in Vuljector/src environment. Details: {exc}"
             ),
         )
 
