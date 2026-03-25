@@ -368,17 +368,22 @@ def _show_single_injection_run(run_dir: Path) -> None:
     _section("5. Retry & Format Error Metrics")
     fmt_errs      = m["format_errors"]
     outer_retries = m["retries"]
+
+    # Inner retries: LLM format errors within a single agent call
     if not fmt_errs:
         print("    No trajectory data available (format error stats require trajectory logs).")
     else:
         total_fmt = sum(fmt_errs)
         total_api = sum(m["api_calls"])
         avg_fmt   = statistics.mean(fmt_errs)
-        print(f"    {'Total format errors (all attempts)':<36} {total_fmt:>4}")
-        print(f"    {'Avg format errors per attempt':<36} {avg_fmt:>7.2f}")
-        print(f"    {'Format error rate (of all API calls)':<36} {_pct(total_fmt, total_api):>8}  {DIM}({total_fmt} / {total_api}){RESET}")
-    if outer_retries and sum(outer_retries):
-        print(f"    {'Outer strategy retries':<36} {sum(outer_retries):>4}")
+        print(f"    {'LLM format retries (total)':<36} {total_fmt:>4}")
+        print(f"    {'LLM format retry rate (of API calls)':<36} {_pct(total_fmt, total_api):>8}  {DIM}({total_fmt} / {total_api}){RESET}")
+        print(f"    {'Avg format retries per attempt':<36} {avg_fmt:>7.2f}")
+
+    # Outer retries: full strategy-level injection retries
+    total_outer = sum(outer_retries) if outer_retries else 0
+    print(f"    {'Strategy retries (total)':<36} {total_outer:>4}")
+    print(f"    {'Strategy retry rate':<36} {_pct(total_outer, total):>8}  {DIM}({total_outer} / {total} attempts){RESET}")
 
     # ── 6. Per-Attempt Detail Table ────────────────────────────────────────
     _section("6. Per-Attempt Detail")
@@ -423,7 +428,7 @@ def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> N
         "exploit_on_both": 0, "exv_passed": 0, "exs_passed": 0,
         "ut_failed_count": 0, "ut_runs": 0,
         "input_tokens": [], "output_tokens": [], "steps": [], "api_calls": [],
-        "costs": [], "format_errors": [],
+        "costs": [], "format_errors": [], "retries": [],
         "failures_by_cause": {},
         "all_attempts": [],
     }
@@ -439,7 +444,7 @@ def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> N
         agg["exs_passed"]      += m["exs_passed"]
         agg["ut_failed_count"] += m["ut_failed_count"]
         agg["ut_runs"]         += len(m["ut_counts"])
-        for key in ("input_tokens", "output_tokens", "steps", "api_calls", "costs", "format_errors"):
+        for key in ("input_tokens", "output_tokens", "steps", "api_calls", "costs", "format_errors", "retries"):
             agg[key] += m[key]
         agg["all_attempts"] += [
             {**a, "_run": run_dir.name} for a in m["attempts"]
@@ -495,14 +500,17 @@ def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> N
     _stats_row_agg("Cost (USD)",    agg["costs"],         fmt=".4f", prefix="$")
     print(f"\n    {'Total cost (all runs)':<24}  ${sum(agg['costs']):.4f}")
 
-    # ── 5. Format Errors ──────────────────────────────────────────────────
+    # ── 5. Retry & Format Errors ──────────────────────────────────────────
     _section("5. Retry & Format Error Metrics")
     if agg["format_errors"]:
         total_fmt = sum(agg["format_errors"])
         total_api = sum(agg["api_calls"])
-        print(f"    {'Total format errors (all attempts)':<36} {total_fmt:>4}")
-        print(f"    {'Avg format errors per attempt':<36} {statistics.mean(agg['format_errors']):>7.2f}")
-        print(f"    {'Format error rate (of all API calls)':<36} {_pct(total_fmt, total_api):>8}  {DIM}({total_fmt} / {total_api}){RESET}")
+        print(f"    {'LLM format retries (total)':<36} {total_fmt:>4}")
+        print(f"    {'LLM format retry rate (of API calls)':<36} {_pct(total_fmt, total_api):>8}  {DIM}({total_fmt} / {total_api}){RESET}")
+        print(f"    {'Avg format retries per attempt':<36} {statistics.mean(agg['format_errors']):>7.2f}")
+    total_outer = sum(agg["retries"]) if agg["retries"] else 0
+    print(f"    {'Strategy retries (total)':<36} {total_outer:>4}")
+    print(f"    {'Strategy retry rate':<36} {_pct(total_outer, total):>8}  {DIM}({total_outer} / {total} attempts){RESET}")
 
     # ── 6. Failure Causes ─────────────────────────────────────────────────
     _section("6. Failure Causes")
