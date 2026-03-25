@@ -146,7 +146,22 @@ unit tests                  →  expects baseline test count to pass
 
 Only entries that pass all three checks are persisted to the dataset.
 
-## To do
-- [] Test parsing
-- [] More comprehensive stress testing of pipeline (To do today)
-- [] Add more language support
+## Metrics
+
+After an injection run completes, use the `report` subcommand:
+
+```bash
+# Full metrics report for a specific injection run (primary usage)
+uv run vuljector report --run-dir runs/injection/flask/<run_id>
+```
+
+The injection report covers:
+
+| Section | Metrics |
+|---|---|
+| Attack success | Patch rate, verification rate, LLM rejection rate, false-positive rate |
+| Exploit checks | `exploit_on_vulnerable` / `exploit_on_secure` pass rates |
+| Code breakage | Baseline unit test count, regression count, per-attempt delta |
+| Token & cost | Input/output tokens, steps, API calls — mean / median / mode + total cost |
+| Format errors | Total format errors, avg per attempt, rate of all API calls |
+| Per-attempt table | Candidate, CWE, injection/verification status, steps, API calls, format errors, cost, UT delta, failure cause |
