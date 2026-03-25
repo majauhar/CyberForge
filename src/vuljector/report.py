@@ -251,9 +251,31 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
     }
 
 
-# ── Report: injection run ──────────────────────────────────────────────────────
+# ── Router ─────────────────────────────────────────────────────────────────────
+
+def _is_single_run(path: Path) -> bool:
+    """True if path is a single injection_XXXXZ run dir, false if it's a project-level dir."""
+    return (path / "injection_request.json").exists()
+
 
 def show_injection_run(run_dir: Path) -> None:
+    """Entry point: auto-detect single run vs. project-level dir and dispatch."""
+    if _is_single_run(run_dir):
+        _show_single_injection_run(run_dir)
+    else:
+        child_runs = sorted(
+            [d for d in run_dir.iterdir() if d.is_dir() and (d / "injection_request.json").exists()],
+            key=lambda p: p.name,
+        )
+        if not child_runs:
+            print(f"No injection runs found under {run_dir}")
+            return
+        _show_aggregated_injection_runs(run_dir, child_runs)
+
+
+# ── Report: single injection run ───────────────────────────────────────────────
+
+def _show_single_injection_run(run_dir: Path) -> None:
     run_id  = run_dir.name
     request = _load_json(run_dir / "injection_request.json") or {}
     summary = _load_json(run_dir / "run_summary.json")
@@ -373,6 +395,135 @@ def show_injection_run(run_dir: Path) -> None:
         ut_delta = f"{a['ut_delta']:+d}" if a["ut_delta"] is not None else "  n/a"
         print(
             f"  {a['name']:<11}  {a['candidate_id']:<14}  {cwe_str:<8}  "
+            f"{inj_icon}    {ver_icon}    "
+            f"{a['steps']:>5}  {a['api_calls']:>4}  {a['format_errors']:>6}  "
+            f"${a['cost']:>7.4f}  {ut_delta:>6}  {cause}"
+        )
+
+
+# ── Report: aggregated injection runs ──────────────────────────────────────────
+
+def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> None:
+    """Aggregate metrics across all injection runs in a project/method directory."""
+    _header(f"Injection report: {parent_dir.name}  ({len(run_dirs)} runs)")
+
+    # Print per-run summary line
+    print(f"\n  {'Run ID':<35}  {'Attempts':>8}  {'Verified':>8}  {'Cost':>8}  Candidates file")
+    print(f"  {'─'*35}  {'─'*8}  {'─'*8}  {'─'*8}  {'─'*40}")
+    for run_dir in run_dirs:
+        req     = _load_json(run_dir / "injection_request.json") or {}
+        summary = _load_json(run_dir / "run_summary.json") or {}
+        m       = _collect_injection_metrics(run_dir)
+        cands   = Path(req.get("candidates_file", "?")).name if req.get("candidates_file") else "?"
+        print(f"  {run_dir.name:<35}  {m['total']:>8}  {m['ver_success']:>8}  ${sum(m['costs']):>7.4f}  {cands}")
+
+    # Aggregate across all runs
+    agg: dict[str, Any] = {
+        "total": 0, "inj_success": 0, "inj_failure": 0, "ver_success": 0,
+        "exploit_on_both": 0, "exv_passed": 0, "exs_passed": 0,
+        "ut_failed_count": 0, "ut_runs": 0,
+        "input_tokens": [], "output_tokens": [], "steps": [], "api_calls": [],
+        "costs": [], "format_errors": [],
+        "failures_by_cause": {},
+        "all_attempts": [],
+    }
+
+    for run_dir in run_dirs:
+        m = _collect_injection_metrics(run_dir)
+        agg["total"]           += m["total"]
+        agg["inj_success"]     += m["inj_success"]
+        agg["inj_failure"]     += m["inj_failure"]
+        agg["ver_success"]     += m["ver_success"]
+        agg["exploit_on_both"] += m["exploit_on_both"]
+        agg["exv_passed"]      += m["exv_passed"]
+        agg["exs_passed"]      += m["exs_passed"]
+        agg["ut_failed_count"] += m["ut_failed_count"]
+        agg["ut_runs"]         += len(m["ut_counts"])
+        for key in ("input_tokens", "output_tokens", "steps", "api_calls", "costs", "format_errors"):
+            agg[key] += m[key]
+        agg["all_attempts"] += [
+            {**a, "_run": run_dir.name} for a in m["attempts"]
+        ]
+        for a in m["attempts"]:
+            if a["ver_status"] != "success":
+                fc = str(a["failure_cause"] or "unknown")
+                agg["failures_by_cause"][fc] = agg["failures_by_cause"].get(fc, 0) + 1
+
+    total = agg["total"]
+    if total == 0:
+        print("\n  (no attempts found across any run)")
+        return
+
+    # ── 1. Attack Success ──────────────────────────────────────────────────
+    _section("1. Attack Success Metrics")
+    inj_with_patch = agg["inj_success"]
+    print(f"    {'Attempts total':<36} {total:>4}")
+    print(f"    {'Patch produced (injection success)':<36} {inj_with_patch:>4} / {total}  ({_pct(inj_with_patch, total)})")
+    print(f"    {'Verified (injection + verification OK)':<36} {agg['ver_success']:>4} / {total}  ({_pct(agg['ver_success'], total)})")
+    print(f"    {'LLM Rejections (no patch produced)':<36} {agg['inj_failure']:>4} / {total}  ({_pct(agg['inj_failure'], total)})")
+    print(f"    {'Exploit fires on both (false positive)':<36} {agg['exploit_on_both']:>4} / {inj_with_patch}  ({_pct(agg['exploit_on_both'], inj_with_patch)})  {DIM}← of patched only{RESET}")
+
+    # ── 2. Exploit Checks ─────────────────────────────────────────────────
+    _section("2. Exploit Script Checks  (of patched attempts)")
+    print(f"    {'exploit_on_vulnerable passed':<36} {agg['exv_passed']:>4} / {inj_with_patch}  ({_pct(agg['exv_passed'], inj_with_patch)})  {DIM}exploit triggers on vulnerable{RESET}")
+    print(f"    {'exploit_on_secure passed':<36} {agg['exs_passed']:>4} / {inj_with_patch}  ({_pct(agg['exs_passed'], inj_with_patch)})  {DIM}exploit fails on secure (correct){RESET}")
+
+    # ── 3. Code Breakage ──────────────────────────────────────────────────
+    _section("3. Code Breakage Rate  (unit tests)")
+    print(f"    {'Attempts that ran tests':<36} {agg['ut_runs']}")
+    print(f"    {'Broke existing tests (delta < 0)':<36} {agg['ut_failed_count']:>4} / {agg['ut_runs']}  ({_pct(agg['ut_failed_count'], agg['ut_runs'])})")
+    for a in agg["all_attempts"]:
+        if a.get("ut_delta") is not None and a["ut_delta"] < 0:
+            print(f"      {DIM}{a['_run']} / {a['name']} ({a['candidate_id']}): {a['ut_count']} passed  (Δ = {a['ut_delta']}){RESET}")
+
+    # ── 4. Token & Cost ───────────────────────────────────────────────────
+    _section("4. Token & Cost Metrics  (per attempt, mean / median / mode)")
+
+    def _stats_row_agg(label: str, values: list, fmt: str = ".0f", prefix: str = "") -> None:
+        if not values:
+            print(f"    {label:<24}  n/a")
+            return
+        mean   = statistics.mean(values)
+        median = statistics.median(values)
+        mode   = _safe_mode([round(v, 4) for v in values] if isinstance(values[0], float) else values)
+        _stat_row(label, mean, median, mode, fmt=fmt, prefix=prefix)
+
+    _stats_row_agg("Input tokens",  agg["input_tokens"],  fmt=".0f")
+    _stats_row_agg("Output tokens", agg["output_tokens"], fmt=".0f")
+    _stats_row_agg("Turns / steps", agg["steps"],         fmt=".1f")
+    _stats_row_agg("API calls",     agg["api_calls"],     fmt=".1f")
+    _stats_row_agg("Cost (USD)",    agg["costs"],         fmt=".4f", prefix="$")
+    print(f"\n    {'Total cost (all runs)':<24}  ${sum(agg['costs']):.4f}")
+
+    # ── 5. Format Errors ──────────────────────────────────────────────────
+    _section("5. Retry & Format Error Metrics")
+    if agg["format_errors"]:
+        total_fmt = sum(agg["format_errors"])
+        total_api = sum(agg["api_calls"])
+        print(f"    {'Total format errors (all attempts)':<36} {total_fmt:>4}")
+        print(f"    {'Avg format errors per attempt':<36} {statistics.mean(agg['format_errors']):>7.2f}")
+        print(f"    {'Format error rate (of all API calls)':<36} {_pct(total_fmt, total_api):>8}  {DIM}({total_fmt} / {total_api}){RESET}")
+
+    # ── 6. Failure Causes ─────────────────────────────────────────────────
+    _section("6. Failure Causes")
+    failed = total - agg["ver_success"]
+    for cause, count in sorted(agg["failures_by_cause"].items(), key=lambda x: -x[1]):
+        print(f"    {cause:<40}  {_bar(count, failed)}  {count:>3}x  ({_pct(count, total)})")
+
+    # ── 7. Per-Attempt Detail ─────────────────────────────────────────────
+    _section("7. Per-Attempt Detail")
+    print(f"  {'Run':<35}  {'Attempt':<11}  {'Candidate':<14}  {'CWE':<8}  {'Inj':>3}  {'Ver':>3}  "
+          f"{'Steps':>5}  {'API':>4}  {'FmtErr':>6}  {'Cost':>8}  {'UT Δ':>6}  Failure Cause")
+    print(f"  {'─'*35}  {'─'*11}  {'─'*14}  {'─'*8}  {'─'*3}  {'─'*3}  "
+          f"{'─'*5}  {'─'*4}  {'─'*6}  {'─'*8}  {'─'*6}  {'─'*25}")
+    for a in agg["all_attempts"]:
+        inj_icon = PASS if a["inj_status"] == "success" else FAIL
+        ver_icon = PASS if a["ver_status"] == "success" else (SKIP if a["ver_status"] == "skipped" else FAIL)
+        cwe_str  = a["cwe_id"] if a["cwe_id"] else "?"
+        cause    = str(a["failure_cause"] or "")[:30]
+        ut_delta = f"{a['ut_delta']:+d}" if a.get("ut_delta") is not None else "  n/a"
+        print(
+            f"  {a['_run']:<35}  {a['name']:<11}  {a['candidate_id']:<14}  {cwe_str:<8}  "
             f"{inj_icon}    {ver_icon}    "
             f"{a['steps']:>5}  {a['api_calls']:>4}  {a['format_errors']:>6}  "
             f"${a['cost']:>7.4f}  {ut_delta:>6}  {cause}"
