@@ -11,6 +11,10 @@ dependencies = [
     "litellm>=1.0.0",
     # Container management
     "docker>=6.0.0",
+    # C/C++ AST parsing (Python 3.13 compatible)
+    "tree-sitter>=0.24",
+    "tree-sitter-c>=0.24",
+    "tree-sitter-cpp>=0.23",
 ]
 
 [project.scripts]
