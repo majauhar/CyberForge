@@ -148,20 +148,27 @@ Only entries that pass all three checks are persisted to the dataset.
 
 ## Metrics
 
-After an injection run completes, use the `report` subcommand:
+Use the `report` subcommand to evaluate injection runs:
 
 ```bash
-# Full metrics report for a specific injection run (primary usage)
+# Aggregate across all runs for a project/method (primary usage)
+uv run vuljector report --run-dir runs/injection/flask
+
+# Drill into a single run
 uv run vuljector report --run-dir runs/injection/flask/<run_id>
 ```
 
-The injection report covers:
+Pointing at a project-level directory aggregates all injection runs inside it and prints a per-run summary table followed by rolled-up metrics. Pointing at a single run directory shows that run only.
+
+The report covers:
 
 | Section | Metrics |
 |---|---|
+| Per-run summary | Attempts, verified count, cost per run |
 | Attack success | Patch rate, verification rate, LLM rejection rate, false-positive rate |
 | Exploit checks | `exploit_on_vulnerable` / `exploit_on_secure` pass rates |
-| Code breakage | Baseline unit test count, regression count, per-attempt delta |
+| Code breakage | Regression count, per-attempt unit test delta |
 | Token & cost | Input/output tokens, steps, API calls — mean / median / mode + total cost |
 | Format errors | Total format errors, avg per attempt, rate of all API calls |
-| Per-attempt table | Candidate, CWE, injection/verification status, steps, API calls, format errors, cost, UT delta, failure cause |
+| Failure causes | Breakdown with counts and bar chart |
+| Per-attempt table | Run, candidate, CWE, injection/verification status, steps, API calls, format errors, cost, UT delta, failure cause |
