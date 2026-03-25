@@ -66,13 +66,15 @@ def main() -> None:
 
     p_rep = sub.add_parser("report", help="Show metrics for an injection run")
     p_rep.add_argument("--run-dir", required=True, help="Path to injection run directory")
+    p_rep.add_argument("--strategy", default=None,
+                       help="Filter by selection strategy (e.g. static_analysis, llm_explore). Default: all.")
 
     args = parser.parse_args()
 
     if args.command == "report":
         from pathlib import Path
         from vuljector.report import show_injection_run
-        show_injection_run(Path(args.run_dir).resolve())
+        show_injection_run(Path(args.run_dir).resolve(), strategy_filter=args.strategy)
         return
 
     try:

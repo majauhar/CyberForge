@@ -45,6 +45,29 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _get_selection_strategy(run_dir: Path) -> str:
+    """Read the selection strategy used to produce the candidates for this injection run."""
+    req = _load_json(run_dir / "injection_request.json") or {}
+    cands_file = req.get("candidates_file")
+    if not cands_file:
+        return "?"
+    # path may be relative to project root
+    cands_path = Path(cands_file)
+    if not cands_path.is_absolute():
+        cands_path = _vuljector_root() / cands_path
+    cands = _load_json(cands_path) or {}
+    return cands.get("selection_strategy_id", "?")
+
+
+def _attempts_to_first_success(run_dir: Path) -> int | None:
+    """Return 1-indexed attempt number of first verified success, or None if no success."""
+    summary = _load_json(run_dir / "run_summary.json") or {}
+    for a in summary.get("attempts", []):
+        if a.get("verification_status") == "success":
+            return a.get("attempt", 0) + 1
+    return None
+
+
 # ── Formatting helpers ─────────────────────────────────────────────────────────
 
 PASS  = "\033[32m✓\033[0m"
@@ -258,7 +281,7 @@ def _is_single_run(path: Path) -> bool:
     return (path / "injection_request.json").exists()
 
 
-def show_injection_run(run_dir: Path) -> None:
+def show_injection_run(run_dir: Path, strategy_filter: str | None = None) -> None:
     """Entry point: auto-detect single run vs. project-level dir and dispatch."""
     if _is_single_run(run_dir):
         _show_single_injection_run(run_dir)
@@ -270,7 +293,12 @@ def show_injection_run(run_dir: Path) -> None:
         if not child_runs:
             print(f"No injection runs found under {run_dir}")
             return
-        _show_aggregated_injection_runs(run_dir, child_runs)
+        if strategy_filter:
+            child_runs = [r for r in child_runs if _get_selection_strategy(r) == strategy_filter]
+            if not child_runs:
+                print(f"No runs found matching selection strategy '{strategy_filter}'")
+                return
+        _show_aggregated_injection_runs(run_dir, child_runs, strategy_filter=strategy_filter)
 
 
 # ── Report: single injection run ───────────────────────────────────────────────
@@ -408,19 +436,21 @@ def _show_single_injection_run(run_dir: Path) -> None:
 
 # ── Report: aggregated injection runs ──────────────────────────────────────────
 
-def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> None:
+def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path],
+                                     strategy_filter: str | None = None) -> None:
     """Aggregate metrics across all injection runs in a project/method directory."""
-    _header(f"Injection report: {parent_dir.name}  ({len(run_dirs)} runs)")
+    filter_label = f"  (strategy: {strategy_filter})" if strategy_filter else ""
+    _header(f"Injection report: {parent_dir.name}  ({len(run_dirs)} runs){filter_label}")
 
     # Print per-run summary line
-    print(f"\n  {'Run ID':<35}  {'Attempts':>8}  {'Verified':>8}  {'Cost':>8}  Candidates file")
-    print(f"  {'─'*35}  {'─'*8}  {'─'*8}  {'─'*8}  {'─'*40}")
+    print(f"\n  {'Run ID':<35}  {'Selection Strategy':<22}  {'Attempts':>8}  {'→ Success':>9}  {'Verified':>8}  {'Cost':>8}")
+    print(f"  {'─'*35}  {'─'*22}  {'─'*8}  {'─'*9}  {'─'*8}  {'─'*8}")
     for run_dir in run_dirs:
-        req     = _load_json(run_dir / "injection_request.json") or {}
-        summary = _load_json(run_dir / "run_summary.json") or {}
-        m       = _collect_injection_metrics(run_dir)
-        cands   = Path(req.get("candidates_file", "?")).name if req.get("candidates_file") else "?"
-        print(f"  {run_dir.name:<35}  {m['total']:>8}  {m['ver_success']:>8}  ${sum(m['costs']):>7.4f}  {cands}")
+        m        = _collect_injection_metrics(run_dir)
+        sel_strat = _get_selection_strategy(run_dir)
+        to_succ  = _attempts_to_first_success(run_dir)
+        to_succ_str = f"attempt {to_succ}" if to_succ is not None else "never"
+        print(f"  {run_dir.name:<35}  {sel_strat:<22}  {m['total']:>8}  {to_succ_str:>9}  {m['ver_success']:>8}  ${sum(m['costs']):>7.4f}")
 
     # Aggregate across all runs
     agg: dict[str, Any] = {
@@ -467,6 +497,13 @@ def _show_aggregated_injection_runs(parent_dir: Path, run_dirs: list[Path]) -> N
     print(f"    {'Verified (injection + verification OK)':<36} {agg['ver_success']:>4} / {total}  ({_pct(agg['ver_success'], total)})")
     print(f"    {'LLM Rejections (no patch produced)':<36} {agg['inj_failure']:>4} / {total}  ({_pct(agg['inj_failure'], total)})")
     print(f"    {'Exploit fires on both (false positive)':<36} {agg['exploit_on_both']:>4} / {inj_with_patch}  ({_pct(agg['exploit_on_both'], inj_with_patch)})  {DIM}← of patched only{RESET}")
+
+    # Attempts to first success per run
+    to_success_vals = [_attempts_to_first_success(r) for r in run_dirs]
+    succeeded = [v for v in to_success_vals if v is not None]
+    if succeeded:
+        avg_to_success = statistics.mean(succeeded)
+        print(f"    {'Avg attempts to first success':<36} {avg_to_success:>7.1f}  {DIM}(across {len(succeeded)}/{len(run_dirs)} runs that succeeded){RESET}")
 
     # ── 2. Exploit Checks ─────────────────────────────────────────────────
     _section("2. Exploit Script Checks  (of patched attempts)")
