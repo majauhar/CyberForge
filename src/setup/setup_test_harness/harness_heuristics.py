@@ -165,11 +165,19 @@ def try_heuristic_harness(*, runtime, project: str, src_dir: str, unit_tests_dir
 
     write_test_harness(unit_tests_dir, _render_test_sh(src_dir, rule))
     count, enabled = run_baseline_unit_tests(runtime=runtime, project=project)
-    if enabled and (count or 0) > 0:
+    if not enabled:
+        return False
+    if count is None:
+        logger.warning(
+            "[%s] Heuristic harness baseline timed out (rule=%s) — falling back to agent.",
+            project, rule.get("name", "?"),
+        )
+        return False
+    if count > 0:
         logger.info(
             "[%s] Heuristic harness accepted: rule=%s framework=%s passed=%d",
             project, rule.get("name", "?"), rule.get("framework", "?"), count,
         )
         return True
-    logger.info("[%s] Heuristic harness yielded count=%s — falling back to agent.", project, count)
+    logger.info("[%s] Heuristic harness yielded 0 passing tests — falling back to agent.", project)
     return False

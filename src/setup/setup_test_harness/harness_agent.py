@@ -43,11 +43,11 @@ def run_baseline_unit_tests(*, runtime, project: str) -> tuple[int | None, bool]
     try:
         result = subprocess.run(
             ["docker", "run", "--rm", runtime.image_tag, "bash", "-c", cmd],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=300,
         )
     except subprocess.TimeoutExpired:
         logger.warning("[%s] Baseline unit test run timed out.", project)
-        return 0, True
+        return None, True
 
     out = (result.stdout or "") + "\n" + (result.stderr or "")
     count = extract_passing_count(out)

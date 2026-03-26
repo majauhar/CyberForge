@@ -44,6 +44,10 @@ def new_run_id(prefix: str) -> str:
     return f"{prefix}_{ts}"
 
 
+def init_run_dir(project: str, run_id: str) -> Path:
+    return runs_root() / "init" / project / run_id
+
+
 def setup_run_dir(project: str, run_id: str) -> Path:
     return runs_root() / "setup" / project / run_id
 

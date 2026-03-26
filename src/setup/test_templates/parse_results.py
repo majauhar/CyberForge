@@ -139,12 +139,12 @@ def parse(text: str, framework: str) -> dict:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--framework", default="pytest",
-                   choices=sorted(set(_SPECIAL_PARSERS) | set(_REGEX_PARSERS)),
-                   help="Test framework output format")
+    p.add_argument("--framework", default="generic",
+                   help="Test framework output format (unknown values fall back to generic)")
     args = p.parse_args()
+    framework = args.framework if args.framework in set(_SPECIAL_PARSERS) | set(_REGEX_PARSERS) else "generic"
     text = sys.stdin.read()
     sys.stdout.write(text)
     if text and not text.endswith("\n"):
         sys.stdout.write("\n")
-    print(json.dumps(parse(text, args.framework)))
+    print(json.dumps(parse(text, framework)))

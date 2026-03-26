@@ -108,8 +108,10 @@ The test command MUST be piped through the pre-installed parser as the **last li
 ```
 <test_command> 2>&1 | python3 /workspace/run/unit_tests/parse_results.py --framework <FRAMEWORK>
 ```
-Supported frameworks: `pytest` `cargo` `gotest` `ctest` `maven` `gradle` `jest` `tap`
+Supported `--framework` values (use EXACTLY one of these — unknown values fall back to `generic`):
+`pytest` `cargo` `gotest` `ctest` `maven` `gradle` `jest` `tap`
 `phptest` `btest` `gtest` `meson` `unittest` `autotools` `generic`
+For TAP-based runners (borp, tape, node-tap…) use `tap`. For unknown frameworks use `generic`.
 You MAY edit `/workspace/run/unit_tests/parse_results.py` to add a missing framework.
 
 ---
