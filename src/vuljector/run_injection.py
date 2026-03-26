@@ -67,6 +67,16 @@ def run_injection(
     sorted_candidates = sorted(candidates, key=lambda c: c.rank)
 
     start_phase(runtime, phase="injection", run_dir=run_dir)
+
+    # Install unit_tests/ (test.sh + parse_results.py + support files) into the container.
+    _unit_tests_host = project_root(project) / "unit_tests"
+    if (_unit_tests_host / "test.sh").exists():
+        runtime.copy_to(_unit_tests_host, "/workspace/run/unit_tests")
+        runtime.exec(
+            "chmod -R a+rX /workspace/run/unit_tests"
+            " && chmod +x /workspace/run/unit_tests/test.sh /workspace/run/unit_tests/parse_results.py"
+        )
+
     # pip install the project source so exploits/unit tests can import it.
     # We skip the full build.sh (which compiles C fuzz targets and is slow);
     # a simple pip install is enough to make `import <project>` work.

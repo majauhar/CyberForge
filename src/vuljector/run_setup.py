@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import base64
 import logging
-import re
+import shutil
 import subprocess
 
-from utils.agent import AgentRequest, run_agent_task
-from utils.agent.prompts import SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
+from setup.setup_test_harness import (
+    copy_default_parser_template,
+    run_baseline_unit_tests,
+    try_agent_harness,
+    try_heuristic_harness,
+    validate_unit_tests_dir,
+)
 from utils.json_io import read_json, write_json
 from utils.paths import new_run_id, project_root, setup_run_dir
 from vuljector.core import (
@@ -16,6 +20,7 @@ from vuljector.core import (
     build_runtime,
     load_project_config,
     save_project_config,
+    validate_project_config,
 )
 from vuljector.io_contracts import utc_now_iso
 
@@ -24,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
     config = load_project_config(project)
+    validate_project_config(config)
     run_id = new_run_id("setup")
     run_dir = setup_run_dir(project, run_id)
     request = {
@@ -45,7 +51,7 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
 
         # Discover test harness if not already present, then run baseline.
         _ensure_test_harness(runtime, project, run_dir, model_id)
-        expected_count, unit_tests_enabled = _baseline_unit_tests(runtime, project)
+        expected_count, unit_tests_enabled = run_baseline_unit_tests(runtime=runtime, project=project)
         _persist_expected_count(project, expected_count, unit_tests_enabled)
 
         runtime.mark_setup_completed(True)
@@ -82,96 +88,37 @@ def run_setup(project: str, model_id: str = "claude-sonnet-4-6") -> dict:
 
 
 def _ensure_test_harness(runtime, project: str, run_dir, model_id: str) -> None:
-    """Run test-discovery agent if no test.sh exists for the project."""
-    proj_root = project_root(project)
-    script_host = proj_root / "unit_tests" / "test.sh"
-    if script_host.exists():
-        return  # Already discovered in a previous run.
+    """Validate or replace unit_tests/; then heuristics, then agent; finally assert layout."""
+    unit_tests_dir = project_root(project) / "unit_tests"
+    src_dir = runtime.target_dir
 
-    logger.info("[%s] No test harness found — running test discovery agent.", project)
+    if unit_tests_dir.exists():
+        ok, msg = validate_unit_tests_dir(unit_tests_dir)
+        if ok:
+            return
+        if (unit_tests_dir / "test.sh").exists():
+            logger.warning(
+                "[%s] unit_tests/test.sh exists but validation failed (%s) — deleting unit_tests/ and regenerating.",
+                project,
+                msg,
+            )
+            shutil.rmtree(unit_tests_dir)
+        # Directory exists but no test.sh — fall through to generate.
 
-    # Derive src_dir: the directory inside /src/ that contains the project source.
-    src_dir = runtime.target_dir or project
+    copy_default_parser_template(unit_tests_dir)
 
-    trajectory_path = str(run_dir / "logs" / "test_discovery_trajectory.json")
-    agent_req = AgentRequest(
-        model_id=model_id,
-        prompt=TEST_DISCOVERY_TASK.format(project=project, src_dir=src_dir),
-        workdir=runtime.repo_dir_in_container,
-        system_template=SYSTEM_TEMPLATE,
-        step_limit=30,
-        cost_limit=1.0,
-        setup_commands=["bash /src/build.sh 2>&1 | tail -30 || true"],
-        extract_paths=["/tmp/test_harness.sh", "/tmp/baseline_output.txt"],
-        post_commands=[
-            "bash /tmp/test_harness.sh > /tmp/harness_out.txt 2>&1"
-            "; echo HARNESS_EXIT:$?; tail -20 /tmp/harness_out.txt",
-        ],
-        trajectory_path=trajectory_path,
-    )
-
-    resp = run_agent_task(runtime, agent_req)
-    harness_script = resp.extracted_files.get("/tmp/test_harness.sh", "").strip()
-
-    if not harness_script:
-        raise RuntimeError(
-            f"[{project}] Test discovery agent did not produce /tmp/test_harness.sh. "
-            f"Agent exit_status={resp.exit_status!r}. Check trajectory at {trajectory_path}"
+    if not try_heuristic_harness(runtime=runtime, project=project, src_dir=src_dir, unit_tests_dir=unit_tests_dir):
+        try_agent_harness(
+            runtime=runtime,
+            project=project,
+            run_dir=run_dir,
+            model_id=model_id,
+            src_dir=src_dir,
+            unit_tests_dir=unit_tests_dir,
         )
-
-    # Check harness passed (HARNESS_EXIT:0 in post-command output).
-    harness_passed = False
-    for pr in resp.post_results:
-        output = pr.get("output", "")
-        m = re.search(r"HARNESS_EXIT:(\d+)", output)
-        if m:
-            harness_passed = (int(m.group(1)) == 0)
-
-    if not harness_passed:
-        logger.warning(
-            "[%s] Test discovery harness did not pass (non-zero exit) — saving anyway for review.",
-            project,
-        )
-
-    script_host.parent.mkdir(parents=True, exist_ok=True)
-    script_host.write_text(harness_script, encoding="utf-8")
-    logger.info("[%s] Test harness saved to %s (passed=%s).", project, script_host, harness_passed)
-
-
-def _baseline_unit_tests(runtime, project: str) -> tuple[int | None, bool]:
-    """Run the test harness in a fresh container and return (passing_count, enabled)."""
-    proj_root = project_root(project)
-    script_host = proj_root / "unit_tests" / "test.sh"
-    if not script_host.exists():
-        return None, False
-
-    # Encode the harness script as base64 and install it inside a fresh container.
-    harness = script_host.read_text(encoding="utf-8")
-    encoded = base64.b64encode(harness.encode()).decode()
-    cmd = (
-        f"echo '{encoded}' | base64 -d > /tmp/test_harness.sh && "
-        f"chmod +x /tmp/test_harness.sh && "
-        f"cd {runtime.repo_dir_in_container} && bash /tmp/test_harness.sh"
-    )
-    try:
-        result = subprocess.run(
-            ["docker", "run", "--rm", runtime.image_tag, "bash", "-c", cmd],
-            capture_output=True, text=True, timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("[%s] Baseline unit test run timed out.", project)
-        return 0, True
-
-    out = (result.stdout or "") + "\n" + (result.stderr or "")
-    match = re.search(r"PASSING_TESTS\s*=\s*(\d+)", out)
-    if match:
-        return int(match.group(1)), True
-    match = re.search(r"(\d+)\s+passed", out)
-    if match:
-        return int(match.group(1)), True
-    if result.returncode == 0:
-        return 1, True
-    return 0, True
+    ok, msg = validate_unit_tests_dir(unit_tests_dir)
+    if not ok:
+        raise RuntimeError(msg)
 
 
 def _backup_git_from_image(runtime) -> None:
@@ -182,7 +129,6 @@ def _backup_git_from_image(runtime) -> None:
     The backup is used by the injection/verifier phase to reset to the secure
     base commit between vulnerability attempts.
     """
-    import shutil
     git_backup_dir = runtime.workspace_dir / ".git_backup"
     if git_backup_dir.exists():
         logger.info("[%s] .git backup already exists at %s — skipping.", runtime.project, git_backup_dir)
@@ -258,7 +204,6 @@ def _persist_expected_count(project: str, expected_count: int | None, enabled: b
         return
     payload["unit_tests"] = {
         "enabled": True,
-        "script": "unit_tests/test.sh",
         "expected_passing_count": expected_count,
     }
     save_project_config(project, payload)

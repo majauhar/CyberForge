@@ -24,9 +24,33 @@ def load_project_config(project: str) -> ProjectConfig:
         target_dir=target_dir,
         secure_base_commit=str(payload.get("secure_base_commit", "")),
         main_repo_url=main_repo_url,
-        source=dict(payload.get("source", {})),
         unit_tests=payload.get("unit_tests"),
     )
+
+
+def validate_project_config(config: ProjectConfig) -> None:
+    """
+    Lightweight validation for all ProjectConfig attributes.
+
+    Notes:
+    - secure_base_commit may be empty before setup auto-detects it.
+    - unit_tests may be None or a dict.
+    """
+    problems: list[str] = []
+
+    if not isinstance(config.project, str) or not config.project.strip():
+        problems.append("project must be a non-empty")
+    if not isinstance(config.target_dir, str) or not config.target_dir.strip():
+        problems.append("target_dir must be a non-empty string")
+    if not isinstance(config.main_repo_url, str) or not config.main_repo_url.strip():
+        problems.append("main_repo_url must be a non-empty string")
+    if not isinstance(config.secure_base_commit, str):
+        problems.append("secure_base_commit must be a string (may be empty pre-setup)")
+    if config.unit_tests is not None and not isinstance(config.unit_tests, dict):
+        problems.append("unit_tests must be a dict or None")
+
+    if problems:
+        raise ValueError(f"Invalid ProjectConfig for project={config.project!r}: " + "; ".join(problems))
 
 
 def save_project_config(project: str, payload: dict) -> None:

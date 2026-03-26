@@ -389,7 +389,6 @@ Path: `vuljector-projects/<project>/project.json`
   "secure_base_commit": "<sha>",
   "unit_tests": {
     "enabled": true,
-    "script": "unit_tests/test.sh",
     "expected_passing_count": 142
   }
 }
