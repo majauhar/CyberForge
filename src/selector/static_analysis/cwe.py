@@ -419,6 +419,259 @@ CWE_FROM_PAIR: dict[tuple[str, str], list[str]] = {
     ("exception_guard",  "free_op"):             ["CWE-390", "CWE-415"],
     ("exception_guard",  "file_op"):             ["CWE-390", "CWE-772"],
     ("exception_guard",  "socket_op"):           ["CWE-390", "CWE-404"],
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # JS / TypeScript pairs
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # ── sanitize × JS sinks ───────────────────────────────────────────────────
+    ("sanitize",         "xss_op"):              ["CWE-79"],
+    ("sanitize",         "sql_exec"):            ["CWE-89"],
+    ("sanitize",         "subprocess"):          ["CWE-78"],
+    ("sanitize",         "eval_exec"):           ["CWE-94"],
+    ("sanitize",         "xml_parse"):           ["CWE-611"],
+    ("sanitize",         "nosql_exec"):          ["CWE-943"],
+    ("sanitize",         "template_render"):     ["CWE-94", "CWE-1336"],
+    ("sanitize",         "log_op"):              ["CWE-117"],
+    ("sanitize",         "redirect_op"):         ["CWE-601"],
+    ("sanitize",         "graphql_op"):          ["CWE-89"],
+    ("sanitize",         "dom_op"):              ["CWE-79"],
+    ("sanitize",         "postmessage_op"):      ["CWE-79"],
+    ("sanitize",         "url_construct"):       ["CWE-601", "CWE-918"],
+
+    # ── format_check × JS sinks ───────────────────────────────────────────────
+    ("format_check",     "xss_op"):              ["CWE-79", "CWE-20"],
+    ("format_check",     "nosql_exec"):          ["CWE-943"],
+    ("format_check",     "eval_exec"):           ["CWE-94"],
+    ("format_check",     "deser"):               ["CWE-502", "CWE-20"],
+    ("format_check",     "redirect_op"):         ["CWE-601"],
+    ("format_check",     "ssrf_op"):             ["CWE-918"],
+    ("format_check",     "template_render"):     ["CWE-94", "CWE-1336"],
+    ("format_check",     "regex_op"):            ["CWE-1333", "CWE-400"],
+    ("format_check",     "url_construct"):       ["CWE-601", "CWE-918"],
+    ("format_check",     "proto_op"):            ["CWE-1321", "CWE-20"],
+    ("format_check",     "jwt_op"):              ["CWE-347", "CWE-20"],
+    ("format_check",     "cookie_op"):           ["CWE-614", "CWE-1004"],
+    ("format_check",     "postmessage_op"):      ["CWE-79", "CWE-20"],
+    ("format_check",     "graphql_op"):          ["CWE-89"],
+    ("format_check",     "file_upload"):         ["CWE-434", "CWE-22"],
+    ("format_check",     "ipc_op"):              ["CWE-20"],
+    ("format_check",     "dom_op"):              ["CWE-79"],
+    ("format_check",     "storage_op"):          ["CWE-200"],
+    ("format_check",     "socket_op"):           ["CWE-200"],
+
+    # ── path_traversal_check × JS sinks ──────────────────────────────────────
+    ("path_traversal_check", "file_op"):         ["CWE-22"],
+    ("path_traversal_check", "path_join"):       ["CWE-22"],
+    ("path_traversal_check", "subprocess"):      ["CWE-22", "CWE-78"],
+    ("path_traversal_check", "http_request"):    ["CWE-22", "CWE-918"],
+    ("path_traversal_check", "data_return"):     ["CWE-22", "CWE-200"],
+    ("path_traversal_check", "file_upload"):     ["CWE-22", "CWE-434"],
+    ("path_traversal_check", "ssrf_op"):         ["CWE-918"],
+
+    # ── auth_guard × JS sinks ─────────────────────────────────────────────────
+    ("auth_guard",       "xss_op"):              ["CWE-862", "CWE-79"],
+    ("auth_guard",       "nosql_exec"):          ["CWE-862", "CWE-943"],
+    ("auth_guard",       "cookie_op"):           ["CWE-862", "CWE-614"],
+    ("auth_guard",       "jwt_op"):              ["CWE-862", "CWE-347"],
+    ("auth_guard",       "proto_op"):            ["CWE-862", "CWE-1321"],
+    ("auth_guard",       "storage_op"):          ["CWE-862", "CWE-200"],
+    ("auth_guard",       "postmessage_op"):      ["CWE-862", "CWE-79"],
+    ("auth_guard",       "url_construct"):       ["CWE-862", "CWE-918"],
+    ("auth_guard",       "env_write"):           ["CWE-15", "CWE-284"],
+    ("auth_guard",       "state_mutation"):      ["CWE-284", "CWE-269"],
+    ("auth_guard",       "ipc_op"):              ["CWE-862", "CWE-284"],
+    ("auth_guard",       "graphql_op"):          ["CWE-862", "CWE-200"],
+    ("auth_guard",       "file_upload"):         ["CWE-862", "CWE-434"],
+    ("auth_guard",       "ssrf_op"):             ["CWE-862", "CWE-918"],
+    ("auth_guard",       "dom_op"):              ["CWE-862", "CWE-79"],
+    ("auth_guard",       "redirect_op"):         ["CWE-862", "CWE-601"],
+
+    # ── csrf_check × JS sinks ────────────────────────────────────────────────
+    ("csrf_check",       "state_mutation"):      ["CWE-352"],
+    ("csrf_check",       "nosql_exec"):          ["CWE-352", "CWE-943"],
+    ("csrf_check",       "file_op"):             ["CWE-352", "CWE-732"],
+    ("csrf_check",       "http_request"):        ["CWE-352", "CWE-918"],
+    ("csrf_check",       "env_write"):           ["CWE-352", "CWE-15"],
+    ("csrf_check",       "proto_op"):            ["CWE-352", "CWE-1321"],
+    ("csrf_check",       "file_upload"):         ["CWE-352", "CWE-434"],
+
+    # ── proto_check × JS sinks ───────────────────────────────────────────────
+    ("proto_check",      "proto_op"):            ["CWE-1321"],
+    ("proto_check",      "state_mutation"):      ["CWE-1321", "CWE-284"],
+    ("proto_check",      "deser"):               ["CWE-1321", "CWE-502"],
+    ("proto_check",      "eval_exec"):           ["CWE-1321", "CWE-94"],
+    ("proto_check",      "ipc_op"):              ["CWE-1321", "CWE-284"],
+
+    # ── jwt_verify × JS sinks ────────────────────────────────────────────────
+    ("jwt_verify",       "jwt_op"):              ["CWE-347"],
+    ("jwt_verify",       "state_mutation"):      ["CWE-347", "CWE-284"],
+    ("jwt_verify",       "nosql_exec"):          ["CWE-347", "CWE-943"],
+    ("jwt_verify",       "file_op"):             ["CWE-347", "CWE-22"],
+    ("jwt_verify",       "graphql_op"):          ["CWE-347", "CWE-200"],
+
+    # ── xss_check × JS sinks ─────────────────────────────────────────────────
+    ("xss_check",        "xss_op"):              ["CWE-79"],
+    ("xss_check",        "dom_op"):              ["CWE-79"],
+    ("xss_check",        "postmessage_op"):      ["CWE-79"],
+    ("xss_check",        "url_construct"):       ["CWE-601"],
+
+    # ── origin_check × JS sinks ──────────────────────────────────────────────
+    ("origin_check",     "postmessage_op"):      ["CWE-79", "CWE-345"],
+    ("origin_check",     "http_request"):        ["CWE-918"],
+    ("origin_check",     "xss_op"):              ["CWE-79", "CWE-346"],
+    ("origin_check",     "ssrf_op"):             ["CWE-918", "CWE-346"],
+    ("origin_check",     "socket_op"):           ["CWE-200", "CWE-346"],
+
+    # ── schema_validate × JS sinks ───────────────────────────────────────────
+    ("schema_validate",  "nosql_exec"):          ["CWE-943", "CWE-20"],
+    ("schema_validate",  "proto_op"):            ["CWE-1321", "CWE-20"],
+    ("schema_validate",  "eval_exec"):           ["CWE-94", "CWE-20"],
+    ("schema_validate",  "file_op"):             ["CWE-434", "CWE-22"],
+    ("schema_validate",  "state_mutation"):      ["CWE-20", "CWE-284"],
+    ("schema_validate",  "graphql_op"):          ["CWE-89"],
+    ("schema_validate",  "file_upload"):         ["CWE-434"],
+    ("schema_validate",  "xss_op"):              ["CWE-79", "CWE-20"],
+    ("schema_validate",  "redirect_op"):         ["CWE-601"],
+    ("schema_validate",  "ssrf_op"):             ["CWE-918"],
+
+    # ── content_type_check × JS sinks ────────────────────────────────────────
+    ("content_type_check", "file_op"):           ["CWE-434", "CWE-22"],
+    ("content_type_check", "deser"):             ["CWE-434", "CWE-502"],
+    ("content_type_check", "eval_exec"):         ["CWE-434", "CWE-94"],
+    ("content_type_check", "subprocess"):        ["CWE-434", "CWE-78"],
+    ("content_type_check", "file_upload"):       ["CWE-434"],
+    ("content_type_check", "nosql_exec"):        ["CWE-434", "CWE-943"],
+
+    # ── rate_limit × JS sinks ────────────────────────────────────────────────
+    ("rate_limit",       "nosql_exec"):          ["CWE-770"],
+    ("rate_limit",       "graphql_op"):          ["CWE-400"],
+    ("rate_limit",       "eval_exec"):           ["CWE-770", "CWE-94"],
+
+    # ── size_check × JS sinks ────────────────────────────────────────────────
+    ("size_check",       "file_upload"):         ["CWE-400", "CWE-434"],
+    ("size_check",       "ipc_op"):              ["CWE-400"],
+    ("size_check",       "nosql_exec"):          ["CWE-770"],
+    ("size_check",       "graphql_op"):          ["CWE-400"],
+
+    # ── crypto_check × JS sinks ──────────────────────────────────────────────
+    ("crypto_check",     "crypto_op"):           ["CWE-327", "CWE-338"],
+    ("crypto_check",     "jwt_op"):              ["CWE-327", "CWE-347"],
+    ("crypto_check",     "cookie_op"):           ["CWE-614", "CWE-327"],
+
+    # ── null_check × JS sinks ────────────────────────────────────────────────
+    ("null_check",       "xss_op"):              ["CWE-79", "CWE-476"],
+    ("null_check",       "eval_exec"):           ["CWE-94", "CWE-476"],
+    ("null_check",       "proto_op"):            ["CWE-1321", "CWE-476"],
+    ("null_check",       "redirect_op"):         ["CWE-601", "CWE-476"],
+    ("null_check",       "storage_op"):          ["CWE-200", "CWE-476"],
+    ("null_check",       "jwt_op"):              ["CWE-347", "CWE-476"],
+    ("null_check",       "ssrf_op"):             ["CWE-918", "CWE-476"],
+    ("null_check",       "nosql_exec"):          ["CWE-943", "CWE-476"],
+    ("null_check",       "postmessage_op"):      ["CWE-79", "CWE-476"],
+    ("null_check",       "graphql_op"):          ["CWE-89", "CWE-476"],
+    ("null_check",       "dom_op"):              ["CWE-79", "CWE-476"],
+    ("null_check",       "file_upload"):         ["CWE-434", "CWE-476"],
+    ("null_check",       "cookie_op"):           ["CWE-614", "CWE-476"],
+
+    # ── type_check × JS sinks ────────────────────────────────────────────────
+    ("type_check",       "xss_op"):              ["CWE-79", "CWE-20"],
+    ("type_check",       "nosql_exec"):          ["CWE-943", "CWE-20"],
+    ("type_check",       "postmessage_op"):      ["CWE-79", "CWE-20"],
+    ("type_check",       "redirect_op"):         ["CWE-601", "CWE-20"],
+    ("type_check",       "graphql_op"):          ["CWE-89"],
+    ("type_check",       "ssrf_op"):             ["CWE-918", "CWE-20"],
+    ("type_check",       "storage_op"):          ["CWE-200", "CWE-20"],
+    ("type_check",       "dom_op"):              ["CWE-79", "CWE-20"],
+    ("type_check",       "file_upload"):         ["CWE-434", "CWE-20"],
+    ("type_check",       "jwt_op"):              ["CWE-347", "CWE-20"],
+    ("type_check",       "cookie_op"):           ["CWE-614", "CWE-20"],
+
+    # ── param_check × JS sinks ───────────────────────────────────────────────
+    ("param_check",      "sql_exec"):            ["CWE-89", "CWE-20"],
+    ("param_check",      "nosql_exec"):          ["CWE-943", "CWE-20"],
+    ("param_check",      "xss_op"):              ["CWE-79", "CWE-20"],
+    ("param_check",      "redirect_op"):         ["CWE-601"],
+    ("param_check",      "file_op"):             ["CWE-22"],
+    ("param_check",      "ssrf_op"):             ["CWE-918"],
+    ("param_check",      "graphql_op"):          ["CWE-89"],
+    ("param_check",      "subprocess"):          ["CWE-78"],
+    ("param_check",      "eval_exec"):           ["CWE-94"],
+    ("param_check",      "proto_op"):            ["CWE-1321"],
+
+    # ── encoding_check × JS sinks ─────────────────────────────────────────────
+    ("encoding_check",   "xss_op"):              ["CWE-79", "CWE-116"],
+    ("encoding_check",   "log_op"):              ["CWE-117", "CWE-116"],
+    ("encoding_check",   "sql_exec"):            ["CWE-89", "CWE-116"],
+    ("encoding_check",   "nosql_exec"):          ["CWE-943", "CWE-116"],
+    ("encoding_check",   "dom_op"):              ["CWE-79", "CWE-116"],
+
+    # ── error_check × JS sinks ───────────────────────────────────────────────
+    ("error_check",      "xss_op"):              ["CWE-755", "CWE-79"],
+    ("error_check",      "nosql_exec"):          ["CWE-755", "CWE-943"],
+    ("error_check",      "jwt_op"):              ["CWE-755", "CWE-347"],
+    ("error_check",      "proto_op"):            ["CWE-755", "CWE-1321"],
+    ("error_check",      "deser"):               ["CWE-755", "CWE-502"],
+    ("error_check",      "log_op"):              ["CWE-209"],
+    ("error_check",      "cookie_op"):           ["CWE-755", "CWE-614"],
+    ("error_check",      "crypto_op"):           ["CWE-755", "CWE-327"],
+    ("error_check",      "redirect_op"):         ["CWE-755", "CWE-601"],
+    ("error_check",      "ssrf_op"):             ["CWE-755", "CWE-918"],
+    ("error_check",      "storage_op"):          ["CWE-755", "CWE-200"],
+
+    # ── regex_match × JS sinks ───────────────────────────────────────────────
+    ("regex_match",      "nosql_exec"):          ["CWE-943", "CWE-20"],
+    ("regex_match",      "eval_exec"):           ["CWE-94", "CWE-20"],
+    ("regex_match",      "xss_op"):              ["CWE-79", "CWE-20"],
+    ("regex_match",      "redirect_op"):         ["CWE-601"],
+    ("regex_match",      "ssrf_op"):             ["CWE-918"],
+
+    # ── bounds_check × JS sinks ──────────────────────────────────────────────
+    ("bounds_check",     "regex_op"):            ["CWE-400", "CWE-1333"],
+    ("bounds_check",     "xss_op"):              ["CWE-79", "CWE-20"],
+    ("bounds_check",     "storage_op"):          ["CWE-200", "CWE-20"],
+    ("bounds_check",     "ipc_op"):              ["CWE-400"],
+    ("bounds_check",     "nosql_exec"):          ["CWE-943", "CWE-20"],
+
+    # ── jwt_verify (already partially covered above, add remaining) ───────────
+    ("jwt_verify",       "data_return"):         ["CWE-347", "CWE-200"],
+    ("jwt_verify",       "cookie_op"):           ["CWE-347", "CWE-614"],
+
+    # ── xss_check (remaining) ────────────────────────────────────────────────
+    ("xss_check",        "template_render"):     ["CWE-79", "CWE-94"],
+    ("xss_check",        "data_return"):         ["CWE-79", "CWE-200"],
+    ("xss_check",        "redirect_op"):         ["CWE-601"],
+
+    # ── origin_check (remaining) ──────────────────────────────────────────────
+    ("origin_check",     "redirect_op"):         ["CWE-601"],
+    ("origin_check",     "data_return"):         ["CWE-200", "CWE-346"],
+
+    # ── csrf_check (remaining) ───────────────────────────────────────────────
+    ("csrf_check",       "sql_exec"):            ["CWE-352", "CWE-89"],
+    ("csrf_check",       "data_return"):         ["CWE-352", "CWE-200"],
+    ("csrf_check",       "cookie_op"):           ["CWE-352", "CWE-614"],
+
+    # ── rate_limit (remaining) ───────────────────────────────────────────────
+    ("rate_limit",       "data_return"):         ["CWE-770", "CWE-400"],
+    ("rate_limit",       "sql_exec"):            ["CWE-770"],
+    ("rate_limit",       "regex_op"):            ["CWE-400", "CWE-1333"],
+    ("rate_limit",       "http_request"):        ["CWE-770", "CWE-400"],
+    ("rate_limit",       "subprocess"):          ["CWE-770", "CWE-78"],
+
+    # ── size_check (remaining) ───────────────────────────────────────────────
+    ("size_check",       "regex_op"):            ["CWE-1333", "CWE-400"],
+    ("size_check",       "file_op"):             ["CWE-770", "CWE-400"],
+    ("size_check",       "deser"):               ["CWE-400", "CWE-770"],
+    ("size_check",       "http_request"):        ["CWE-770", "CWE-400"],
+    ("size_check",       "sql_exec"):            ["CWE-89", "CWE-770"],
+
+    # ── auth_guard (remaining) ───────────────────────────────────────────────
+    ("auth_guard",       "data_return"):         ["CWE-862", "CWE-200"],
+    ("auth_guard",       "http_request"):        ["CWE-862", "CWE-918"],
+    ("auth_guard",       "template_render"):     ["CWE-862", "CWE-94"],
+    ("auth_guard",       "socket_op"):           ["CWE-862", "CWE-200"],
+    ("auth_guard",       "log_op"):              ["CWE-862", "CWE-200"],
+    ("auth_guard",       "eval_exec"):           ["CWE-862", "CWE-94"],
 }
 
 
@@ -482,6 +735,15 @@ CWE_TO_GROUP: dict[str, str] = {
     "CWE-250":  "Privileges",      # Execution with unnecessary privileges
     "CWE-470":  "Dynamic code",    # Use of externally-controlled input to select classes/code
     "CWE-863":  "Access control",  # Incorrect authorization
+
+    # ── JS / TypeScript specific ──────────────────────────────────────────────
+    "CWE-1321": "Type-related",            # Prototype pollution
+    "CWE-345":  "Authentication",          # Insufficient verification of data authenticity
+    "CWE-346":  "Web",                     # Origin validation error
+    "CWE-943":  "Input validation",        # NoSQL injection
+    "CWE-116":  "Strings",                 # Improper encoding/escaping for output
+    "CWE-209":  "Confidentiality",         # Error message information exposure
+    "CWE-338":  "Numeric errors",          # Use of cryptographically weak PRNG
 
     # ── C/C++ specific ────────────────────────────────────────────────────────
     "CWE-120":  "Ante buffer operation",   # classic buffer overflow (strcpy etc.)
@@ -547,6 +809,20 @@ _INJECTION_HINTS: dict[str, str] = {
     "priv_op":              "drop privilege check before setuid/setgid or privileged API call",
     "socket_op":            "remove host/port validation before network connection",
     "reflection_op":        "allow user-controlled string to select attribute or method via getattr",
+    # JS / TypeScript operation hints
+    "xss_op":               "remove XSS sanitization before innerHTML/document.write",
+    "proto_op":             "remove prototype check before Object.assign/_.merge on req.body",
+    "jwt_op":               "replace jwt.verify() with jwt.decode() — skips signature check",
+    "regex_op":             "pass user-controlled string directly to new RegExp() (ReDoS)",
+    "path_join":            "remove path.normalize/traversal check before path.join",
+    "storage_op":           "write sensitive data to localStorage without encryption",
+    "postmessage_op":       "remove origin check before accessing event.data",
+    "url_construct":        "pass user string to new URL() — open redirect / SSRF",
+    "nosql_exec":           "pass req.body directly as MongoDB query object (NoSQL injection)",
+    "ssrf_op":              "use user-controlled URL in server-side fetch/request call",
+    "graphql_op":           "allow user-supplied query string in graphql() execution",
+    "dom_op":               "assign user input to element.style or setAttribute without encoding",
+    "file_upload":          "remove MIME type check — allow upload of arbitrary file type",
     # C/C++ operation hints
     "memory_write":         "remove bounds/null check before memcpy/strcpy (buffer overflow)",
     "memory_write_bounded": "remove size argument or inflate length in strncpy/snprintf",
@@ -585,6 +861,16 @@ _CHECKPOINT_HINTS: dict[str, str] = {
     "content_type_check":    "remove MIME/content-type validation before upload",
     "size_check":            "remove payload/file size limit check",
     "redirect_check":        "remove URL safety validation before redirect",
+    # JS / TypeScript checkpoint hints
+    "origin_check":          "remove origin validation from CORS / postMessage handler",
+    "xss_check":             "remove HTML encoding before DOM write",
+    "proto_check":           "remove hasOwnProperty guard enabling prototype pollution",
+    "jwt_verify":            "replace jwt.verify() with jwt.decode() — no signature check",
+    "schema_validate":       "remove JSON schema validation before processing untrusted input",
+    "regex_match":           "remove regex-based input allowlist validation",
+    "param_check":           "skip existence/type check on request parameters",
+    "encoding_check":        "skip character encoding validation before processing input",
+    "crypto_check":          "remove minimum key length / algorithm safety check",
     # C/C++ checkpoint hints
     "zero_check":            "remove divide-by-zero guard",
     "length_check":          "remove string length check before buffer operation",

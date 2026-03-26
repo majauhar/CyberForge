@@ -15,6 +15,7 @@ from selector.static_analysis.classifier import classify_repo, RepoProfile
 from selector.static_analysis.api_extractor import extract_api
 from selector.static_analysis.call_graph import build_call_graph
 from selector.static_analysis.call_graph_c import build_call_graph_c
+from selector.static_analysis.call_graph_js import build_call_graph_js
 from selector.static_analysis.enumerator import enumerate_pairs
 from selector.static_analysis.scorer import score_complexity, get_difficulty
 from selector.static_analysis.cwe import assign_cwes, injection_hint
@@ -140,6 +141,12 @@ def run(
         graph_c, nodes_c = build_call_graph_c(repo_root, api_entries, profile)
         graph.update(graph_c)
         nodes.update(nodes_c)
+
+    if any(lang in profile.languages for lang in ("js", "ts")):
+        _log("Stage 2 (JS/TS): building JS/TS call graph…")
+        graph_js, nodes_js = build_call_graph_js(repo_root, api_entries, profile)
+        graph.update(graph_js)
+        nodes.update(nodes_js)
 
     _log(f"  {len(nodes)} functions, {sum(len(v) for v in graph.values())} edges")
 
