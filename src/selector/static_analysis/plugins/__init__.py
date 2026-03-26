@@ -7,13 +7,18 @@ To add a new language:
 """
 
 from selector.static_analysis.plugins.python_plugin import PythonPlugin
-# from selector.static_analysis.plugins.c_plugin import CPlugin        # future
+from selector.static_analysis.plugins.c_plugin import CPlugin
 # from selector.static_analysis.plugins.go_plugin import GoPlugin      # future
 # from selector.static_analysis.plugins.java_plugin import JavaPlugin  # future
 # from selector.static_analysis.plugins.js_plugin import JsPlugin      # future
 
+_c_plugin_instance = CPlugin()
+
 PLUGIN_REGISTRY: dict[str, object] = {
     "python": PythonPlugin(),
+    "c":      _c_plugin_instance,
+    "cpp":    _c_plugin_instance,
+    "c++":    _c_plugin_instance,
 }
 
 

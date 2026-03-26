@@ -14,6 +14,7 @@ from selector.static_analysis.models import VulnCandidate, PipelineOutput
 from selector.static_analysis.classifier import classify_repo, RepoProfile
 from selector.static_analysis.api_extractor import extract_api
 from selector.static_analysis.call_graph import build_call_graph
+from selector.static_analysis.call_graph_c import build_call_graph_c
 from selector.static_analysis.enumerator import enumerate_pairs
 from selector.static_analysis.scorer import score_complexity, get_difficulty
 from selector.static_analysis.cwe import assign_cwes, injection_hint
@@ -35,11 +36,12 @@ def _build_candidate_from_pair(pair, nodes) -> VulnCandidate:
     if op_node:
         line_range = (op_node.line_start, op_node.line_end)
 
+    op_language = nodes[pair.operation_function].language if pair.operation_function in nodes else "python"
     return VulnCandidate(
         file=pair.operation.file,
         function=pair.operation_function.split("::")[-1],
         line_range=line_range,
-        language="python",
+        language=op_language,
         strategy="checkpoint_op_pair",
         checkpoint=pair.checkpoint,
         operation=pair.operation,
@@ -132,6 +134,13 @@ def run(
     # ── Stage 2: Build call graph ─────────────────────────────────────────────
     _log("Stage 2: building call graph…")
     graph, nodes = build_call_graph(repo_root, api_entries, profile)
+
+    if any(lang in profile.languages for lang in ("c", "cpp", "c++")):
+        _log("Stage 2 (C/C++): building C/C++ call graph…")
+        graph_c, nodes_c = build_call_graph_c(repo_root, api_entries, profile)
+        graph.update(graph_c)
+        nodes.update(nodes_c)
+
     _log(f"  {len(nodes)} functions, {sum(len(v) for v in graph.values())} edges")
 
     # ── Stage 3: Enumerate checkpoint × operation pairs ───────────────────────
