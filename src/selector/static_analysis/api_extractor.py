@@ -197,6 +197,9 @@ def extract_api(repo_root: Path, profile: RepoProfile) -> list[APIEntry]:
     if any(lang in profile.languages for lang in ("c", "cpp", "c++")):
         entries.extend(extract_c_api(repo_root, profile))
 
+    if any(lang in profile.languages for lang in ("js", "ts")):
+        entries.extend(extract_js_api(repo_root, profile))
+
     # Future: if 'go' in profile.languages: entries.extend(extract_go_api(...))
 
     return entries
@@ -366,5 +369,120 @@ def extract_c_api(
                     evidence="non_static_function",
                     language=lang_str,
                 ))
+
+    return entries
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JavaScript / TypeScript API extraction
+# ─────────────────────────────────────────────────────────────────────────────
+
+def extract_js_api(
+    repo_root: Path,
+    profile: RepoProfile,
+) -> list[APIEntry]:
+    """Walk JS/TS files and extract public (exported / route-handler) functions."""
+    from selector.static_analysis.call_graph_js import (
+        _lang_for_file as _js_lang_for_file,
+        _lang_str_for_file as _js_lang_str_for_file,
+        _get_module_name as _js_get_module_name,
+        _extract_functions,
+        _extract_exported_names,
+        _get_queries,
+        _is_route_handler_context,
+        _should_skip as _js_should_skip,
+    )
+    from selector.static_analysis.plugins.js_plugin import JsPlugin
+    from tree_sitter import Parser as _TSParser
+
+    _js_plugin_inst = JsPlugin()
+
+    js_exts = {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}
+    js_files = [
+        f for f in repo_root.rglob("*")
+        if f.suffix.lower() in js_exts and not _js_should_skip(f, repo_root)
+    ]
+
+    entries: list[APIEntry] = []
+
+    for js_file in js_files:
+        try:
+            source = js_file.read_text(errors="ignore")
+        except OSError:
+            continue
+
+        source_lines = source.splitlines()
+        module_name = _js_get_module_name(js_file, repo_root)
+        file_str    = str(js_file.relative_to(repo_root))
+        lang        = _js_lang_for_file(js_file)
+        lang_str    = _js_lang_str_for_file(js_file)
+
+        try:
+            parser = _TSParser(lang)
+            source_bytes = source.encode("utf-8", errors="replace")
+            tree = parser.parse(source_bytes)
+        except Exception:
+            continue
+
+        named_fn_q, var_fn_q, _call_q, export_q = _get_queries(lang)
+        exported_names = _extract_exported_names(tree, source_bytes, export_q, source)
+        fn_list = _extract_functions(tree, source_bytes, named_fn_q, var_fn_q)
+
+        def _extract_js_params(fn_name: str, line_start: int) -> list[str]:
+            idx = line_start - 1
+            if idx >= len(source_lines):
+                return []
+            line = source_lines[idx]
+            m = re.search(r"\(([^)]*)\)", line)
+            if not m:
+                return []
+            raw = m.group(1).strip()
+            if not raw:
+                return []
+            params = []
+            for part in raw.split(","):
+                part = part.strip()
+                part = re.sub(r"[{}\[\]?=].*", "", part).strip()
+                part = part.lstrip(".")
+                part = part.split(":")[0].strip()
+                if part and re.match(r"^\w+$", part):
+                    params.append(part)
+            return params
+
+        for fn_name, line_start, line_end in fn_list:
+            is_exported      = fn_name in exported_names
+            module_exports   = bool(re.search(
+                rf"(?:module\.exports|exports)\.{re.escape(fn_name)}\s*=", source
+            ))
+            is_route_handler = _is_route_handler_context(source_lines, line_start)
+
+            context = {
+                "is_exported":      is_exported,
+                "module_exports":   module_exports,
+                "is_route_handler": is_route_handler,
+            }
+
+            if not _js_plugin_inst.is_public_function(fn_name, context):
+                continue
+
+            fn_id  = f"{module_name}::{fn_name}"
+            params = _extract_js_params(fn_name, line_start)
+
+            evidence = (
+                "exported" if is_exported
+                else "module_exports" if module_exports
+                else "route_handler" if is_route_handler
+                else "public_name_prefix"
+            )
+
+            entries.append(APIEntry(
+                file=file_str,
+                function=fn_name,
+                function_id=fn_id,
+                line=line_start,
+                params=params,
+                evidence=evidence,
+                language=lang_str,
+            ))
 
     return entries
