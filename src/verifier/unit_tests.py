@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import json
 from pathlib import Path
 
 from setup.container_runtime import ContainerRuntime
@@ -27,13 +27,13 @@ def run_unit_tests(
     script_host = project_root / script_rel
     if not script_host.exists():
         return "failed", None, f"Missing unit test script: {script_host}", ""
+    parser_host = script_host.parent / "parse_results.py"
+    if not parser_host.exists():
+        raise RuntimeError(f"[{project_root}] Missing required {parser_host} (expected alongside unit_tests/test.sh).")
 
-    runtime.exec("mkdir -p /workspace/run/unit_tests").raise_for_status("mkdir unit_tests mount failed")
-    runtime.copy_to(script_host, "/workspace/run/unit_tests/test.sh")
-    runtime.exec("chmod +x /workspace/run/unit_tests/test.sh").raise_for_status("chmod test.sh failed")
     test_result = runtime.exec("bash /workspace/run/unit_tests/test.sh", workdir=repo_dir)
     raw_output = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
-    passed_count = _extract_passing_count(raw_output)
+    passed_count = extract_passing_count(raw_output)
 
     if passed_count is None:
         return "parse_error", None, "Could not parse passing count from test output.", raw_output
@@ -49,13 +49,18 @@ def run_unit_tests(
         return "failed", passed_count, f"{passed_count} passed, expected {expected} (delta={delta:+d}).", raw_output
 
 
-def _extract_passing_count(output: str) -> int | None:
-    # Custom format: PASSING_TESTS=N
-    match = re.search(r"PASSING_TESTS\s*=\s*(\d+)", output)
-    if match:
-        return int(match.group(1))
-    # Pytest native format: "N passed" (possibly with ", N skipped/failed/etc.")
-    match = re.search(r"(\d+)\s+passed", output)
-    if match:
-        return int(match.group(1))
+def extract_passing_count(output: str) -> int | None:
+    """Parse the JSON summary line appended by parse_results.py: {"passed": N, "failed": M}.
+
+    Scans from the end so stray stderr lines (e.g. pip warnings) after the JSON
+    do not prevent detection.
+    """
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            return int(json.loads(line)["passed"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            continue
     return None

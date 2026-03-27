@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,28 +33,20 @@ class ContainerRuntime:
         target_dir: str,
         secure_base_commit: str,
         workspace_dir: Path,
-        oss_fuzz_path: Path | None = None,
-        repos: dict | None = None,
+        main_repo_url: str = "",
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
         self.target_dir = target_dir
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
-        self.oss_fuzz_path = oss_fuzz_path
-        self.repos: dict = repos or {}
+        self.main_repo_url = main_repo_url
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()
 
-        if oss_fuzz_path is not None:
-            # OSS-Fuzz mode: hash the project's Dockerfile + build.sh from oss-fuzz
-            oss_proj_dir = oss_fuzz_path / "projects" / project
-            self.setup_hash = self._compute_setup_hash(oss_proj_dir if oss_proj_dir.exists() else setup_dir)
-            self.image_tag = f"gcr.io/oss-fuzz/{project}"
-        else:
-            self.setup_hash = self._compute_setup_hash(self.setup_dir)
-            self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
+        self.setup_hash = self._compute_setup_hash(self.setup_dir)
+        self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
 
         self.repo_dir_in_container = f"/src/{target_dir}"
         self.container_name = ""
@@ -238,32 +229,13 @@ class ContainerRuntime:
         return bool(self.meta.get("setup_completed"))
 
     def _build_image(self, image_tag: str) -> None:
-        if self.oss_fuzz_path is not None:
-            # OSS-Fuzz: build via infra/helper.py build_image --no-pull <project>
-            helper = self.oss_fuzz_path / "infra" / "helper.py"
-            if not helper.exists():
-                raise RuntimeError(
-                    f"OSS-Fuzz helper.py not found: {helper}\n"
-                    "Clone OSS-Fuzz: git clone https://github.com/google/oss-fuzz"
-                )
-            cmd = [sys.executable, str(helper), "build_image", "--no-pull", self.project]
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.oss_fuzz_path),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout).strip()[-800:]
-                raise RuntimeError(f"helper.py build_image failed: {err}")
-        else:
-            result = subprocess.run(
-                ["docker", "build", "-t", image_tag, str(self.setup_dir)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
+        result = subprocess.run(
+            ["docker", "build", "-t", image_tag, str(self.setup_dir)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
 
     @staticmethod
     def _image_exists(image_tag: str) -> bool:

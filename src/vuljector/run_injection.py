@@ -44,7 +44,6 @@ def run_injection(
     run_id = new_run_id("injection")
     run_dir = injection_run_dir(project, run_id)
     request_payload = {
-        "schema_version": "v2",
         "project": project,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
@@ -68,6 +67,16 @@ def run_injection(
     sorted_candidates = sorted(candidates, key=lambda c: c.rank)
 
     start_phase(runtime, phase="injection", run_dir=run_dir)
+
+    # Install unit_tests/ (test.sh + parse_results.py + support files) into the container.
+    _unit_tests_host = project_root(project) / "unit_tests"
+    if (_unit_tests_host / "test.sh").exists():
+        runtime.copy_to(_unit_tests_host, "/workspace/run/unit_tests")
+        runtime.exec(
+            "chmod -R a+rX /workspace/run/unit_tests"
+            " && chmod +x /workspace/run/unit_tests/test.sh /workspace/run/unit_tests/parse_results.py"
+        )
+
     # pip install the project source so exploits/unit tests can import it.
     # We skip the full build.sh (which compiles C fuzz targets and is slow);
     # a simple pip install is enough to make `import <project>` work.
@@ -156,7 +165,6 @@ def run_injection(
                 )
             else:
                 verification_result = VerificationResult(
-                    schema_version="v2",
                     project=project,
                     run_id=run_id,
                     timestamp_utc=utc_now_iso(),
@@ -216,7 +224,6 @@ def run_injection(
 
         # Final summary written once after all attempts.
         payload = {
-            "schema_version": "v2",
             "project": project,
             "run_id": run_id,
             "num_vulnerabilities_requested": num_vulnerabilities,
@@ -322,7 +329,6 @@ def _write_vulnerability_metadata(
         for f in manifest.get("files", [])
     ]
     payload = {
-        "schema_version": "v2",
         "id": vulnerability_id,
         "project": project,
         "cwe_group": cwe_group,

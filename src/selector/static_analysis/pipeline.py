@@ -92,7 +92,7 @@ def run(
     verbose: bool = False,
 ) -> PipelineOutput:
     """
-    Run the full VulInjector pipeline on a repository.
+    Run the full Vuljector pipeline on a repository.
 
     Args:
         repo_path:       Path to the repository root.

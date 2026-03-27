@@ -31,7 +31,6 @@ def run_selection(
     run_id = new_run_id("selection")
     run_dir = selection_run_dir(project, run_id)
     request_payload = {
-        "schema_version": "v2",
         "project": project,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),

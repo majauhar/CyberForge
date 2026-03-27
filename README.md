@@ -1,6 +1,6 @@
-# VulInjector
+# Vuljector
 
-Automated vulnerability injection for synthetic security dataset creation. VulInjector injects
+Automated vulnerability injection for synthetic security dataset creation. Vuljector injects
 semantically plausible vulnerabilities into real OSS-Fuzz projects and produces verified
 (exploit triggers + tests pass) dataset entries.
 
@@ -9,7 +9,8 @@ semantically plausible vulnerabilities into real OSS-Fuzz projects and produces 
 Three-phase pipeline:
 
 ```
-Phase 1 — Setup      Build container image, discover + validate test harness, backup .git
+Init             Build image, detect commit, discover test harness → portable project definition
+Phase 1 — Setup      Build/cache ready container for local use
 Phase 2 — Selection  Find where to inject: static analysis or LLM repo exploration
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
 ```
@@ -48,17 +49,16 @@ git clone --depth=1 https://github.com/google/oss-fuzz ../oss-fuzz
 
 The Docker image is built automatically by `setup` when needed — no manual build step required.
 
-### project.json
+### Initialize a project
 
-Use `init` to create `project.json` from oss-fuzz metadata:
+`init` builds the Docker image, detects the secure base commit, discovers the test harness, and writes everything to `vuljector-projects/`. The result is a self-contained, portable project definition that can be committed and shared.
 
 ```bash
 uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
 ```
 
-This creates `vuljector-projects/flask/project.json`. The directory name must exactly match the
-project name under `oss-fuzz/projects/`. `secure_base_commit` is left empty and auto-detected
-when you run `setup`.
+This creates `vuljector-projects/flask/` with `project.json` (including fetching the proper commit), `setup/`, and `unit_tests/`.
+The directory name must exactly match the project name under `oss-fuzz/projects/`.
 
 To override the source subdirectory (if it differs from the project name):
 
@@ -74,10 +74,10 @@ The project name maps to:
 ### Run
 
 ```bash
-# Initialize project (once):
-uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
+# Initialize project (once, writes to vuljector-projects/):
+uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz --model-id claude-sonnet-4-6
 
-# Phase by phase:
+# Phase by phase (setup builds/caches the ready container locally):
 uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10

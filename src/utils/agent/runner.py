@@ -25,6 +25,8 @@ def run_agent_task(
       - Container is destroyed when docker_env.close() is called
     """
     env = _collect_agent_env(request)
+    # Apply collected env to host process so litellm can see Azure/API keys.
+    os.environ.update(env)
     os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
     # Suppress minisweagent's startup banner which prints to stdout and corrupts
     # JSON output when the CLI result is captured via pipe/tee.
@@ -40,7 +42,7 @@ def run_agent_task(
             stdout="",
             stderr=(
                 "mini-swe-agent is not importable. "
-                f"Install it in VulInjector/src environment. Details: {exc}"
+                f"Install it in Vuljector/src environment. Details: {exc}"
             ),
         )
 
@@ -193,23 +195,39 @@ def _collect_agent_env(request: AgentRequest) -> dict[str, str]:
     merged.update(file_env)
     merged.update(dict(os.environ))
 
-    if merged.get("AZURE_ENDPOINT"):
-        merged.setdefault("AZURE_OPENAI_ENDPOINT", merged["AZURE_ENDPOINT"])
-    if merged.get("AZURE_API_KEY"):
-        merged.setdefault("AZURE_OPENAI_API_KEY", merged["AZURE_API_KEY"])
-    if merged.get("AZURE_API_VERSION"):
-        merged.setdefault("AZURE_OPENAI_API_VERSION", merged["AZURE_API_VERSION"])
+    # Bridge all Azure endpoint variants to AZURE_API_BASE (what litellm reads).
+    azure_endpoint = (
+        merged.get("AZURE_API_BASE")
+        or merged.get("AZURE_OPENAI_ENDPOINT")
+        or merged.get("AZURE_ENDPOINT")
+    )
+    if azure_endpoint:
+        merged.setdefault("AZURE_API_BASE", azure_endpoint)
+        merged.setdefault("AZURE_OPENAI_ENDPOINT", azure_endpoint)
+    azure_key = merged.get("AZURE_OPENAI_API_KEY") or merged.get("AZURE_API_KEY")
+    if azure_key:
+        merged.setdefault("AZURE_API_KEY", azure_key)
+        merged.setdefault("AZURE_OPENAI_API_KEY", azure_key)
+    azure_version = merged.get("AZURE_OPENAI_API_VERSION") or merged.get("AZURE_API_VERSION")
+    if azure_version:
+        merged.setdefault("AZURE_API_VERSION", azure_version)
+        merged.setdefault("AZURE_OPENAI_API_VERSION", azure_version)
+    # For rchat, override empty OPENAI_* values (not just missing ones).
     if merged.get("RCHAT_OSS_API_BASE"):
-        merged.setdefault("OPENAI_BASE_URL", merged["RCHAT_OSS_API_BASE"])
-        merged.setdefault("OPENAI_API_BASE", merged["RCHAT_OSS_API_BASE"])
+        if not merged.get("OPENAI_BASE_URL", "").strip():
+            merged["OPENAI_BASE_URL"] = merged["RCHAT_OSS_API_BASE"]
+        if not merged.get("OPENAI_API_BASE", "").strip():
+            merged["OPENAI_API_BASE"] = merged["RCHAT_OSS_API_BASE"]
     if merged.get("RCHAT_OSS_API_KEY"):
-        merged.setdefault("OPENAI_API_KEY", merged["RCHAT_OSS_API_KEY"])
-        merged.setdefault("OPENAI_KEY", merged["RCHAT_OSS_API_KEY"])
+        if not merged.get("OPENAI_API_KEY", "").strip():
+            merged["OPENAI_API_KEY"] = merged["RCHAT_OSS_API_KEY"]
+        if not merged.get("OPENAI_KEY", "").strip():
+            merged["OPENAI_KEY"] = merged["RCHAT_OSS_API_KEY"]
 
     allowed_keys = {
         "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_KEY",
         "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
-        "AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
+        "AZURE_API_KEY", "AZURE_API_BASE", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_API_VERSION", "AZURE_API_VERSION", "AZURE_ENDPOINT",
         "LITELLM_API_BASE", "LITELLM_API_KEY", "LITELLM_CUSTOM_PROVIDER", "LITELLM_SSL_VERIFY",
         "RCHAT_OSS_API_BASE", "RCHAT_OSS_API_KEY",
@@ -239,6 +257,9 @@ def _read_dotenv(path: os.PathLike[str] | str) -> dict[str, str]:
             continue
         key, value = text.split("=", 1)
         key = key.strip()
+        # Strip inline comments (e.g. "VALUE  # comment") and quotes.
+        if " #" in value:
+            value = value[:value.index(" #")]
         value = value.strip().strip("'").strip('"')
         if key:
             out[key] = value

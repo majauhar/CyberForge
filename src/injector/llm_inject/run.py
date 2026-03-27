@@ -21,7 +21,6 @@ For candidates from llm_explore, these extra fields may be absent; graceful fall
 
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from pathlib import Path
@@ -228,18 +227,7 @@ class LLMInjectStrategy(InjectionStrategy):
 
         # ── Setup commands ────────────────────────────────────────────────────
         setup_commands: list[str] = ["bash /src/build.sh 2>&1 | tail -30 || true"]
-        # Read harness from disk (written by setup phase) — not from candidate.extra.
-        _harness_path = project_root(request.project) / "unit_tests" / "test.sh"
-        harness_script = _harness_path.read_text(encoding="utf-8") if _harness_path.exists() else ""
-        if harness_script:
-            encoded = base64.b64encode(harness_script.encode()).decode()
-            setup_commands.append(
-                f"echo '{encoded}' | base64 -d > /tmp/test_harness.sh"
-                f" && chmod +x /tmp/test_harness.sh"
-                f" && echo 'Harness installed OK'"
-            )
-
-        harness_available = bool(harness_script)
+        harness_available = (project_root(request.project) / "unit_tests" / "test.sh").exists()
 
         # ── Language context (syntax check + exploit template) ────────────────
         cwes_str = ", ".join(cwe_candidates) or "unknown"
@@ -288,7 +276,7 @@ class LLMInjectStrategy(InjectionStrategy):
         ]
         if harness_available:
             post_commands.append(
-                "bash /tmp/test_harness.sh > /tmp/harness_out.txt 2>&1"
+                "bash /workspace/run/unit_tests/test.sh > /tmp/harness_out.txt 2>&1"
                 "; echo HARNESS_EXIT:$?; tail -20 /tmp/harness_out.txt"
             )
         post_commands.append(
@@ -377,7 +365,6 @@ class LLMInjectStrategy(InjectionStrategy):
                 failure_msg = "Agent did not produce /tmp/vuln.patch"
             logger.warning("[%s] llm_inject FAILED: %s", request.project, failure_msg)
             return InjectionResult(
-                schema_version="v2",
                 project=request.project,
                 run_id=request.run_id,
                 timestamp_utc=utc_now_iso(),
@@ -410,7 +397,6 @@ class LLMInjectStrategy(InjectionStrategy):
             harness_passed, attack_triggered,
         )
         return InjectionResult(
-            schema_version="v2",
             project=request.project,
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),
@@ -465,7 +451,7 @@ def _parse_post_results(post_results: list[dict]) -> tuple[bool, bool]:
     for pr in post_results:
         cmd = pr.get("command", "")
         output = pr.get("output", "")[:3000]
-        if "test_harness.sh" in cmd:
+        if "test.sh" in cmd:
             code = _parse_exit_marker(output, "HARNESS_EXIT")
             harness_passed = (code == 0) if code is not None else False
         elif "ATTACK_EXIT" in output:
