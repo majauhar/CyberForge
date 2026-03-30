@@ -17,6 +17,7 @@ class ProjectConfig:
     target_dir: str
     secure_base_commit: str
     main_repo_url: str
+    dockerhub_image: str = ""
     unit_tests: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
