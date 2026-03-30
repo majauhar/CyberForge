@@ -2,7 +2,7 @@
 """Read test output from stdin, pass it through, append JSON summary line.
 
 Supported frameworks:
-  pytest, cargo, gotest, ctest, maven, gradle, jest, tap,
+  pytest, cargo, gotest, ctest, maven, gradle, jest, tap, mocha, jasmine,
   phptest, btest, gtest, meson, unittest, autotools, generic
 """
 import argparse, json, re, sys
@@ -49,10 +49,33 @@ def _parse_gradle(text: str) -> dict:
 
 
 def _parse_tap(text: str) -> dict:
-    """TAP / Perl Test::Harness: 'Files=350, Tests=4531, ...' + 'Failed: N)'."""
+    """TAP / Perl Test::Harness: 'Files=350, Tests=4531, ...' + 'Failed: N)'.
+    Also handles Node.js TAP: '# pass N' / '# tests N' / '# fail N'."""
     total = _sum(r"Tests=(\d+)", text)
     failed = _sum(r"Failed:\s+(\d+)\)", text)
+    if total == 0:
+        # Node.js TAP (tape, tap, node-tap)
+        total = _sum(r"# tests\s+(\d+)", text) or _sum(r"# pass\s+(\d+)", text)
+        failed = _sum(r"# fail\s+(\d+)", text)
     return {"passed": max(total - failed, 0), "failed": failed}
+
+
+def _parse_mocha(text: str) -> dict:
+    """Mocha spec/min reporter: 'N passing' / 'N failing' / 'N pending'."""
+    passed = _sum(r"(\d+) passing", text)
+    failed = _sum(r"(\d+) failing", text)
+    return {"passed": passed, "failed": failed}
+
+
+def _parse_jasmine(text: str) -> dict:
+    """Jasmine: 'N specs, M failures' or 'N specs, 0 failures'."""
+    m = re.search(r"(\d+) specs?,\s*(\d+) failures?", text)
+    if m:
+        total, failed = int(m.group(1)), int(m.group(2))
+        return {"passed": max(total - failed, 0), "failed": failed}
+    # Also handle "Ran N of N specs" success format
+    passed = _sum(r"(\d+) specs? executed", text)
+    return {"passed": passed, "failed": 0}
 
 
 def _parse_ctest(text: str) -> dict:
@@ -119,6 +142,8 @@ _SPECIAL_PARSERS = {
     "gotest":   _parse_gotest,
     "gradle":   _parse_gradle,
     "tap":      _parse_tap,
+    "mocha":    _parse_mocha,
+    "jasmine":  _parse_jasmine,
     "ctest":    _parse_ctest,
     "meson":    _parse_meson,
     "maven":    _parse_maven,
