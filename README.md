@@ -1,18 +1,20 @@
 # Vuljector
 
-Automated vulnerability injection for synthetic security dataset creation. Vuljector injects
-semantically plausible vulnerabilities into real OSS-Fuzz projects and produces verified
-(exploit triggers + tests pass) dataset entries.
+Automated vulnerability injection and agent task evaluation for synthetic security dataset
+creation. Vuljector injects semantically plausible vulnerabilities into real OSS-Fuzz
+projects, verifies them (exploit triggers + tests pass), then runs swe-agent-mini on
+synthetic tasks derived from those vulnerabilities to collect trajectories for SFT.
 
 ## What It Does
 
-Three-phase pipeline:
+Four-phase pipeline:
 
 ```
 Init             Build image, detect commit, discover test harness → portable project definition
 Phase 1 — Setup      Build/cache ready container for local use
-Phase 2 — Selection  Find where to inject: static analysis or LLM repo exploration
+Phase 2 — Selection  Find where to inject: static analysis, CodeQL, or LLM exploration
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
+Phase 4 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
 ```
 
 Each phase is independent and rerunnable. Phases communicate through JSON files under `runs/`.
@@ -168,6 +170,57 @@ unit tests                  →  expects baseline test count to pass
 ```
 
 Only entries that pass all three checks are persisted to the dataset.
+
+## Agent Tasks (Phase 4)
+
+Once vulnerabilities are verified and stored in `vuljector-projects/<project>/vulnerabilities/`,
+Phase 4 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
+Trajectories are saved and scored for downstream SFT filtering.
+
+### Task Types
+
+| Task | What the agent knows | Agent must produce | Validation |
+|---|---|---|---|
+| `zero_day_poc` | Nothing — must find the vulnerability | `/tmp/attack.py` | Exploit triggers on vulnerable, not on secure baseline |
+| `one_day_poc` | CWE, affected file(s), patch diff | `/tmp/attack.py` | Same |
+| `secure_patch` | CWE, affected file(s), description | `/tmp/fix.patch` | Reference exploit no longer triggers; unit tests pass |
+
+### Run
+
+```bash
+uv run vuljector agent-task <project> <vulnerability_id> <task_type> <model_id>
+
+# Examples:
+uv run vuljector agent-task flask vulnerability_0 one_day_poc claude-sonnet-4-6
+uv run vuljector agent-task flask vulnerability_0 zero_day_poc claude-sonnet-4-6
+uv run vuljector agent-task flask vulnerability_0 secure_patch claude-sonnet-4-6
+```
+
+### Output
+
+```
+runs/agent_tasks/<project>/<task_type>/<run_id>/
+  task_request.json     # inputs
+  task_spec.json        # full task spec (CWE, patch diff, affected files)
+  trajectory.json       # raw mini-swe-agent conversation
+  validation_result.json
+  task_result.json      # validation status + quality metrics + SFT tier
+  artifacts/
+    attack.py           # agent's exploit (PoC tasks)
+    fix.patch           # agent's fix (secure_patch task)
+```
+
+### SFT Trajectory Tiers
+
+`task_result.json` includes a `quality_metrics.sft_tier` field:
+
+| Tier | Criteria | Action |
+|---|---|---|
+| `tier1` | `validation=success`, `completed=True`, `format_errors=0` | Keep for SFT |
+| `tier2` | `validation=success`, `completed=True`, `format_errors≤2` | Review before SFT |
+| `drop` | Any other | Discard |
+
+The raw `trajectory.json` messages field contains the full agent conversation for SFT formatting.
 
 ## Metrics
 

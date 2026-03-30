@@ -31,6 +31,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 # src-layout: all packages live under src/
 packages = [
+    "src/agent_tasks",
     "src/injector",
     "src/selector",
     "src/setup",
