@@ -80,6 +80,7 @@ uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
 # Phase by phase:
 uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
+uv run vuljector selection flask codeql claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10
 uv run vuljector injection flask llm_inject claude-sonnet-4-6 \
     runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 3
@@ -94,9 +95,11 @@ uv run vuljector run flask static_analysis llm_inject claude-sonnet-4-6
 
 ## Selection Strategies
 
+Three complementary strategies. Run one or all — they find different vulnerability classes.
+
 ### `static_analysis`
 
-Runs a 7-stage static analysis pipeline on the repo (pure Python, runs on host, no container):
+Runs a 7-stage AST pipeline on the repo (pure Python, runs on host, no container):
 
 ```
 Stage 0  Classifier       Detect language, security models, FFI
@@ -108,19 +111,39 @@ Stage 5  CWE Assigner     CWE candidates + injection hint per pair
 Stage 6  Gap-fill         Crypto misuse, TOCTOU, missing-check detectors
 ```
 
-**Key design**: cross-products security checkpoints (null_check, bounds_check, auth_guard, etc.)
-with security-critical operations (eval_exec, file_op, subprocess, sql_exec, etc.). No
-pattern-library bias — uses code structure.
+**Strengths**: high yield (1000s of candidates), detects structural absence of controls
+(missing auth, missing error handling), works for any language via regex.
 
-Produces up to 500 candidates per entry point, ranked by complexity score.
+**Best for**: Access control, error handling, race conditions, confidentiality.
 
-**Limitation**: Python only. C/Go/Java plugins not yet implemented.
+### `codeql`
+
+Runs CodeQL semantic analysis in three tiers. Requires `codeql` on PATH (`brew install codeql`).
+**No Docker required** — runs entirely on the host.
+
+```
+Tier 1  Taint-tracked    Provable source → sink data flow paths  (confidence 0.95–0.60)
+Tier 2  Sink-only        All dangerous sinks, no source needed    (confidence 0.70–0.75)
+Tier 3  Combinatorial    All (sink × checkpoint) pairs in fn      (confidence 0.75)
+```
+
+Supported languages: **Python, JavaScript/TypeScript, C/C++**. Requires `codeql` on PATH
+and `cmake`/`gcc`/`clang` for C/C++ repos.
+
+```bash
+uv run vuljector selection flask codeql claude-sonnet-4-6
+```
+
+**Best for**: SQL injection, path traversal, command injection, deserialization, XSS, SSRF.
 
 ### `llm_explore`
 
 Runs a mini-swe-agent inside the project container to autonomously explore the repo and
 identify injection candidates. Writes `/tmp/candidates.json` in PipelineOutput format.
 Works for any language.
+
+**Best for**: Novel/project-specific patterns, config-based vulnerabilities, missing context
+that requires reading multiple files simultaneously.
 
 ## Injection Strategy
 
