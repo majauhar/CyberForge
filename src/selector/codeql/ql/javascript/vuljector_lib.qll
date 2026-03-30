@@ -1,12 +1,16 @@
 /**
  * Vuljector shared library for JavaScript/TypeScript CodeQL queries.
  * Imported by js_pairs.ql, js_sinks.ql, and js_combinatorial.ql.
+ *
+ * Key JS QL type rules:
+ *   DataFlow::CallNode       — free calls f(args); has getCalleeName(), NOT getMethodName()
+ *   DataFlow::MethodCallNode — method calls obj.m(args); has getMethodName(), getReceiver()
+ *   DataFlow::InvokeNode     — supertype of both; use when you only need getAnArgument()
  */
 
 import javascript
 
 // ── Sink detection ────────────────────────────────────────────────────────────
-// Inspired by AST plugin operation categories (js_plugin.py).
 
 predicate vuljectorSink(DataFlow::Node sink, string kind) {
   // SQL: .query(), .execute(), .exec() on DB clients
@@ -16,7 +20,7 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
     kind = "sql_exec"
   )
   or
-  // Command injection: child_process exec/spawn/fork
+  // Command injection: child_process exec/spawn/fork (free calls)
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName()
@@ -24,7 +28,7 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
     kind = "subprocess"
   )
   or
-  // File operations (fs module)
+  // File operations — free calls (fs.readFile etc.)
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName()
@@ -32,15 +36,15 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
     kind = "file_op"
   )
   or
-  // Path operations (path traversal)
-  exists(DataFlow::CallNode call |
+  // Path join/resolve — method calls on path module
+  exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
-    call.getCalleeName().regexpMatch("join|resolve|normalize|relative") and
+    call.getMethodName().regexpMatch("join|resolve|normalize|relative") and
     call.getReceiver().toString().regexpMatch("(?i)path|posix|win32") and
     kind = "file_op"
   )
   or
-  // eval / vm / Function constructor / require with dynamic arg
+  // eval / vm / Function constructor
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName()
@@ -48,70 +52,80 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
     kind = "eval_exec"
   )
   or
+  // dynamic require (static string literals are safe — only flag dynamic args)
   exists(DataFlow::CallNode call |
     sink = call.getArgument(0) and
     call.getCalleeName() = "require" and
+    not sink.asExpr() instanceof StringLiteral and
     kind = "eval_exec"
   )
   or
-  // XSS: innerHTML / outerHTML / srcdoc assignment
+  // XSS: innerHTML / outerHTML / srcdoc property write
   exists(DataFlow::PropWrite pw |
     sink = pw.getRhs() and
     pw.getPropertyName().regexpMatch("innerHTML|outerHTML|srcdoc") and
     kind = "xss_op"
   )
   or
-  exists(DataFlow::CallNode call |
+  // XSS: document.write / document.writeln
+  exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
-    call.getCalleeName().regexpMatch("write|writeln") and
+    call.getMethodName().regexpMatch("write|writeln") and
     call.getReceiver().toString().regexpMatch("(?i)document") and
     kind = "xss_op"
   )
   or
-  // SSRF: fetch / axios / got / request / superagent / http.request
+  // SSRF: fetch / axios / got / request — free calls
   exists(DataFlow::CallNode call |
     sink = call.getArgument(0) and
     call.getCalleeName().regexpMatch("fetch|get|request|head|post|put|delete|patch") and
     kind = "http_request"
   )
   or
-  // Open redirect
+  // Open redirect: res.redirect() or res.location()
   exists(DataFlow::MethodCallNode call |
     sink = call.getArgument(0) and
     call.getMethodName().regexpMatch("redirect|location") and
     kind = "redirect_op"
   )
   or
-  // Deserialization: unserialize / deserialize / parse / JSON.parse / inflate
+  // Deserialization — free calls
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName()
-        .regexpMatch("unserialize|deserialize|parse|fromJSON|inflate|ungzip") and
+        .regexpMatch("unserialize|deserialize|inflate|ungzip") and
     kind = "deser"
   )
   or
-  // Template rendering: nunjucks.renderString, handlebars.compile, pug.render
+  // Deserialization — method calls (JSON.parse, yaml.load, etc.)
+  exists(DataFlow::MethodCallNode call |
+    sink = call.getAnArgument() and
+    call.getMethodName().regexpMatch("parse|fromJSON|load|loads|deserialize") and
+    kind = "deser"
+  )
+  or
+  // Template rendering — method calls
   exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
     call.getMethodName().regexpMatch("renderString|compile|render|fromString") and
     kind = "template_render"
   )
   or
-  // Cookie operations (missing httpOnly/secure flags)
+  // Cookie operations
   exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
     call.getMethodName().regexpMatch("cookie|setCookie|clearCookie") and
     kind = "cookie_op"
   )
   or
-  // postMessage with potentially wildcard origin
+  // postMessage
   exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
     call.getMethodName() = "postMessage" and
     kind = "postmessage_op"
   )
   or
-  // localStorage / sessionStorage (client-side storage injection)
+  // localStorage.setItem / sessionStorage.setItem
   exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
     call.getMethodName().regexpMatch("setItem|removeItem") and
@@ -119,24 +133,24 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
     kind = "storage_op"
   )
   or
-  // Prototype pollution: Object.assign / merge / extend with user-controlled keys
+  // Prototype pollution: Object.assign / merge / extend (free calls)
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName().regexpMatch("assign|merge|extend|defaults|deepmerge|deepExtend") and
     kind = "proto_op"
   )
   or
-  // XML / HTML parsing
+  // XML/HTML parsing — free calls
   exists(DataFlow::CallNode call |
     sink = call.getAnArgument() and
     call.getCalleeName().regexpMatch("parseXml|parseHTML|DOMParser|parseFromString|xml2js") and
     kind = "xml_parse"
   )
   or
-  // Log injection
-  exists(DataFlow::CallNode call |
+  // Log injection — method calls on logger objects
+  exists(DataFlow::MethodCallNode call |
     sink = call.getAnArgument() and
-    call.getCalleeName().regexpMatch("log|info|warn|error|debug|trace") and
+    call.getMethodName().regexpMatch("log|info|warn|error|debug|trace") and
     call.getReceiver().toString().regexpMatch("(?i)console|logger|winston|bunyan|pino") and
     kind = "log_op"
   )
@@ -152,10 +166,13 @@ predicate vuljectorSink(DataFlow::Node sink, string kind) {
 // ── Combinatorial checkpoint detection ────────────────────────────────────────
 // checkpointInFunction: all checkpoint patterns in function f.
 // Returns one result per checkpoint — enables combinatorial (sink × checkpoint) pairing.
-// Inspired by the full AST checkpoint pattern set (js_plugin.py).
+//
+// KEY RULE: getMethodName() is only available on DataFlow::MethodCallNode.
+//           getCalleeName() is only available on DataFlow::CallNode.
+//           Split any predicate that needs both into two separate `or` clauses.
 
 predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string cpText) {
-  // null_check: strict equality / inequality (=== null, !== undefined, == null)
+  // null_check: strict equality / inequality (=== null, !== undefined)
   exists(IfStmt s |
     s.getContainer() = f and
     (s.getCondition() instanceof StrictEqualityTest or
@@ -163,21 +180,21 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "null_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // null_check (negation): if (!x), if (!user), if (!token)
+  // null_check: negation if (!x)
   exists(IfStmt s |
     s.getContainer() = f and
     s.getCondition() instanceof LogicalNotExpr and
     cpKind = "null_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // bounds_check: relational comparisons (.length < N, size > limit)
+  // bounds_check: relational comparisons
   exists(IfStmt s |
     s.getContainer() = f and
     s.getCondition() instanceof RelationalComparison and
     cpKind = "bounds_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // type_check: typeof === "string", instanceof
+  // type_check: typeof === / instanceof
   exists(IfStmt s |
     s.getContainer() = f and
     (s.getCondition().(EqualityTest).getAnOperand() instanceof TypeofExpr or
@@ -192,19 +209,23 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "whitelist_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // auth_guard: isAuthenticated(), requireAuth(), hasRole(), etc.
+  // auth_guard: free calls — isAuthenticated(), requireAuth(), etc.
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (
-      call.getCalleeName()
-          .regexpMatch("(?i)isAuthenticated|requireAuth|checkAuth|ensureAuth|ensureLoggedIn|isLoggedIn|hasRole|verifyToken|isAdmin|checkPermission|authorize|requiresAuth") or
-      call.getMethodName()
-          .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|requireAuth|isAdmin|can|isAuthorized|isSignedIn")
-    ) and
+    call.getCalleeName()
+        .regexpMatch("(?i)isAuthenticated|requireAuth|checkAuth|ensureAuth|ensureLoggedIn|isLoggedIn|hasRole|verifyToken|isAdmin|checkPermission|authorize|requiresAuth") and
     cpKind = "auth_guard" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // auth_guard: res.sendStatus(401/403), res.status(401/403)
+  // auth_guard: method calls — user.isAuthenticated(), req.isAdmin(), etc.
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName()
+        .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|requireAuth|isAdmin|can|isAuthorized|isSignedIn") and
+    cpKind = "auth_guard" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // auth_guard: res.sendStatus(401/403) or res.status(401/403)
   exists(DataFlow::MethodCallNode call |
     call.getContainer() = f and
     call.getMethodName().regexpMatch("sendStatus|status") and
@@ -212,61 +233,91 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "auth_guard" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // schema_validate: Joi.validate(), ajv.validate(), zod.parse(), Yup.validate()
-  exists(DataFlow::CallNode call |
+  // schema_validate: method calls — schema.validate(), zod.parse(), ajv.compile()
+  exists(DataFlow::MethodCallNode call |
     call.getContainer() = f and
     call.getMethodName()
         .regexpMatch("validate|parse|safeParse|parseAsync|check|assert|validateOrReject") and
     cpKind = "schema_validate" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // jwt_verify: jwt.verify(), jose.jwtVerify(), verifyToken()
+  // jwt_verify: free calls — verifyToken(), validateJwt()
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (call.getCalleeName().regexpMatch("(?i)verifyToken|validateJwt|verifyJwt|checkToken") or
-     call.getMethodName() = "verify" and
-     call.getReceiver().toString().regexpMatch("(?i)jwt|jsonwebtoken|jose|jws")) and
+    call.getCalleeName().regexpMatch("(?i)verifyToken|validateJwt|verifyJwt|checkToken") and
     cpKind = "jwt_verify" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // csrf_check: req.csrfToken(), validateCsrfToken(), verifyCsrf()
+  // jwt_verify: method calls — jwt.verify(), jose.jwtVerify()
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName() = "verify" and
+    call.getReceiver().toString().regexpMatch("(?i)jwt|jsonwebtoken|jose|jws") and
+    cpKind = "jwt_verify" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // csrf_check: free calls — validateCsrfToken(), csrfProtect()
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (call.getCalleeName().regexpMatch("(?i)validateCsrf|checkCsrf|verifyCsrf|csrfProtect") or
-     call.getMethodName() = "csrfToken") and
+    call.getCalleeName().regexpMatch("(?i)validateCsrf|checkCsrf|verifyCsrf|csrfProtect") and
     cpKind = "csrf_check" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // rate_limit: rateLimit(), limiter.consume(), throttle()
+  // csrf_check: method calls — req.csrfToken()
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName() = "csrfToken" and
+    cpKind = "csrf_check" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // rate_limit: free calls — rateLimit(), throttle()
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (call.getCalleeName().regexpMatch("(?i)rateLimit|rateLimiter|throttle|slowDown") or
-     call.getMethodName().regexpMatch("(?i)consume|check|increment") and
-     call.getReceiver().toString().regexpMatch("(?i)limiter|ratelimit|throttle")) and
+    call.getCalleeName().regexpMatch("(?i)rateLimit|rateLimiter|throttle|slowDown") and
     cpKind = "rate_limit" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // path_traversal_check: path.normalize, path.resolve, includes('..')
-  exists(DataFlow::CallNode call |
+  // rate_limit: method calls — limiter.consume(), limiter.check()
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName().regexpMatch("(?i)consume|check|increment") and
+    call.getReceiver().toString().regexpMatch("(?i)limiter|ratelimit|throttle") and
+    cpKind = "rate_limit" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // path_traversal_check: path.normalize(), path.resolve() on path module
+  exists(DataFlow::MethodCallNode call |
     call.getContainer() = f and
     call.getMethodName().regexpMatch("normalize|resolve|relative") and
     call.getReceiver().toString().regexpMatch("(?i)^path$|posix|win32") and
     cpKind = "path_traversal_check" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // sanitize: DOMPurify.sanitize, validator.escape, encodeURIComponent
+  // sanitize: free calls — encodeURIComponent, htmlspecialchars
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (call.getMethodName().regexpMatch("(?i)sanitize|escape|encode|purify|clean|strip") or
-     call.getCalleeName().regexpMatch("encodeURIComponent|encodeURI|htmlspecialchars")) and
+    call.getCalleeName().regexpMatch("encodeURIComponent|encodeURI|htmlspecialchars") and
     cpKind = "sanitize" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // proto_check: hasOwnProperty(), Object.hasOwn()
+  // sanitize: method calls — DOMPurify.sanitize(), validator.escape()
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName().regexpMatch("(?i)sanitize|escape|encode|purify|clean|strip") and
+    cpKind = "sanitize" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // proto_check: obj.hasOwnProperty() — method call
+  exists(DataFlow::MethodCallNode call |
+    call.getContainer() = f and
+    call.getMethodName() = "hasOwnProperty" and
+    cpKind = "proto_check" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // proto_check: Object.hasOwn() — free call
   exists(DataFlow::CallNode call |
     call.getContainer() = f and
-    (call.getMethodName() = "hasOwnProperty" or
-     call.getCalleeName() = "hasOwn") and
+    call.getCalleeName() = "hasOwn" and
     cpKind = "proto_check" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
@@ -276,7 +327,7 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "error_check" and cpText = "try_catch" and cpLoc = t.getLocation()
   )
   or
-  // format_check: .test(), .match(), validator.isEmail(), .isURL()
+  // format_check: if (re.test(x)), if (validator.isEmail(x)), etc.
   exists(IfStmt s |
     s.getContainer() = f and
     s.getCondition().(MethodCallExpr).getMethodName()
@@ -284,7 +335,7 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "format_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // size_check: if (data.length > MAX), Buffer.byteLength check
+  // size_check: if (data.length > MAX)
   exists(IfStmt s |
     s.getContainer() = f and
     s.getCondition().(RelationalComparison).getAnOperand().(PropAccess).getPropertyName()
@@ -292,16 +343,22 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
     cpKind = "size_check" and cpText = s.getCondition().toString() and cpLoc = s.getLocation()
   )
   or
-  // origin_check: allowedOrigins.includes(), validateOrigin()
-  exists(DataFlow::CallNode call |
+  // origin_check: allowedOrigins.includes(), allowedOrigins.has() — method calls
+  exists(DataFlow::MethodCallNode call |
     call.getContainer() = f and
-    (call.getMethodName().regexpMatch("(?i)includes|has") and
-     call.getReceiver().toString().regexpMatch("(?i)origin|allowed|whitelist") or
-     call.getCalleeName().regexpMatch("(?i)validateOrigin|checkOrigin")) and
+    call.getMethodName().regexpMatch("(?i)includes|has") and
+    call.getReceiver().toString().regexpMatch("(?i)origin|allowed|whitelist") and
     cpKind = "origin_check" and cpText = call.toString() and cpLoc = call.getLocation()
   )
   or
-  // crypto_check: bcrypt.getRounds(), checking key/salt length
+  // origin_check: validateOrigin(), checkOrigin() — free calls
+  exists(DataFlow::CallNode call |
+    call.getContainer() = f and
+    call.getCalleeName().regexpMatch("(?i)validateOrigin|checkOrigin") and
+    cpKind = "origin_check" and cpText = call.toString() and cpLoc = call.getLocation()
+  )
+  or
+  // crypto_check: comparing salt/key/iterations length
   exists(IfStmt s |
     s.getContainer() = f and
     s.getCondition().toString().regexpMatch("(?i).*salt.*length.*|.*key.*length.*|.*iterations.*|.*rounds.*") and
@@ -313,42 +370,44 @@ predicate checkpointInFunction(Function f, Location cpLoc, string cpKind, string
 
 bindingset[sink]
 string cpTextNearSink(DataFlow::Node sink) {
-  // Auth / permission function calls
+  // Auth: free calls
   exists(DataFlow::CallNode call |
     call.getFile() = sink.getFile() and
-    (
-      call.getCalleeName()
-          .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth|verify|authenticate") or
-      call.getMethodName()
-          .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth")
-    ) and
+    call.getCalleeName()
+        .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth|verify|authenticate") and
     result = call.toString()
   )
   or
-  // Schema/input validation calls
-  exists(DataFlow::CallNode call |
+  // Auth: method calls
+  exists(DataFlow::MethodCallNode call |
+    call.getFile() = sink.getFile() and
+    call.getMethodName()
+        .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth") and
+    result = call.toString()
+  )
+  or
+  // Schema validation: method calls
+  exists(DataFlow::MethodCallNode call |
     call.getFile() = sink.getFile() and
     call.getMethodName().regexpMatch("validate|parse|safeParse|check|assert|verify") and
-    not call.getCalleeName()
-            .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin") and
     result = call.toString()
   )
   or
-  // if-statement with strict equality / null checks
+  // if with strict equality / null check
   exists(IfStmt s |
     s.getFile() = sink.getFile() and
     (s.getCondition() instanceof StrictEqualityTest or s.getCondition() instanceof EqualityTest) and
     result = s.getCondition().toString()
   )
   or
-  // if-statement with relational comparison
+  // if with relational comparison
   exists(IfStmt s |
     s.getFile() = sink.getFile() and
     s.getCondition() instanceof RelationalComparison and
     result = s.getCondition().toString()
   )
   or
-  // if-statement with logical NOT
+  // if with logical NOT
   exists(IfStmt s |
     s.getFile() = sink.getFile() and
     s.getCondition() instanceof LogicalNotExpr and
@@ -379,21 +438,24 @@ string cpTextNearSink(DataFlow::Node sink) {
 
 bindingset[sink]
 string cpKindNearSink(DataFlow::Node sink) {
+  // Auth: free calls
   exists(DataFlow::CallNode call |
     call.getFile() = sink.getFile() and
-    (
-      call.getCalleeName()
-          .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth|verify|authenticate") or
-      call.getMethodName()
-          .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth")
-    )
+    call.getCalleeName()
+        .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth|verify|authenticate")
   ) and result = "auth_guard"
   or
-  exists(DataFlow::CallNode call |
+  // Auth: method calls
+  exists(DataFlow::MethodCallNode call |
     call.getFile() = sink.getFile() and
-    call.getMethodName().regexpMatch("validate|parse|safeParse|check|assert|verify") and
-    not call.getCalleeName()
-            .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin")
+    call.getMethodName()
+        .regexpMatch("(?i)isAuthenticated|hasRole|checkPermission|verifyToken|isAdmin|requireAuth|isAuthorized|checkAuth")
+  ) and result = "auth_guard"
+  or
+  // Schema validation: method calls
+  exists(DataFlow::MethodCallNode call |
+    call.getFile() = sink.getFile() and
+    call.getMethodName().regexpMatch("validate|parse|safeParse|check|assert|verify")
   ) and result = "schema_validate"
   or
   exists(IfStmt s |

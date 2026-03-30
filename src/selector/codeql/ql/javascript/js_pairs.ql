@@ -33,7 +33,8 @@ class VuljectorConfig extends TaintTracking::Configuration {
 from VuljectorConfig cfg, DataFlow::Node source, DataFlow::Node sink, string sinkKind
 where
   cfg.hasFlow(source, sink) and
-  vuljectorSink(sink, sinkKind)
+  vuljectorSink(sink, sinkKind) and
+  not sink.getFile().getAbsolutePath().regexpMatch(".*/tools/data/externs/.*|.*/Caskroom/codeql/.*")
 select
   sink.getLocation(),                                          // 1  sink_url
   sink.getFile().getAbsolutePath(),                            // 2  sink_file

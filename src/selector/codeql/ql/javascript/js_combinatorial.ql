@@ -14,6 +14,7 @@ from DataFlow::Node sink, string sinkKind, Function f,
      Location cpLoc, string cpKind, string cpText
 where
   vuljectorSink(sink, sinkKind) and
+  not sink.getFile().getAbsolutePath().regexpMatch(".*/tools/data/externs/.*|.*/Caskroom/codeql/.*") and
   // Bind f to the function containing the sink
   f = sink.getContainer() and
   // Find every checkpoint in that same function

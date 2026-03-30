@@ -12,7 +12,10 @@ import vuljector_lib
 // ── Main query (no source/taint required) ─────────────────────────────────────
 
 from DataFlow::Node sink, string sinkKind
-where vuljectorSink(sink, sinkKind)
+where
+  vuljectorSink(sink, sinkKind) and
+  // Exclude CodeQL's built-in externs/stubs (not project source)
+  not sink.getFile().getAbsolutePath().regexpMatch(".*/tools/data/externs/.*|.*/Caskroom/codeql/.*")
 select
   sink.getLocation(),                                          // 1  sink_url
   sink.getFile().getAbsolutePath(),                            // 2  sink_file
