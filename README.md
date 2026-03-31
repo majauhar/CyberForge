@@ -111,15 +111,10 @@ Stage 5  CWE Assigner     CWE candidates + injection hint per pair
 Stage 6  Gap-fill         Crypto misuse, TOCTOU, missing-check detectors
 ```
 
-**Strengths**: high yield (1000s of candidates), detects structural absence of controls
-(missing auth, missing error handling), works for any language via regex.
-
-**Best for**: Access control, error handling, race conditions, confidentiality.
-
 ### `codeql`
 
 Runs CodeQL semantic analysis in three tiers. Requires `codeql` on PATH (`brew install codeql`).
-**No Docker required** — runs entirely on the host.
+C/C++ DB creation runs inside Docker (project image from `dockerhub_image`); Python and JS/TS run on the host.
 
 ```
 Tier 1  Taint-tracked    Provable source → sink data flow paths  (confidence 0.95–0.60)
@@ -127,23 +122,17 @@ Tier 2  Sink-only        All dangerous sinks, no source needed    (confidence 0.
 Tier 3  Combinatorial    All (sink × checkpoint) pairs in fn      (confidence 0.75)
 ```
 
-Supported languages: **Python, JavaScript/TypeScript, C/C++**. Requires `codeql` on PATH
-and `cmake`/`gcc`/`clang` for C/C++ repos.
+Supported languages: **Python, JavaScript/TypeScript, C/C++**.
 
 ```bash
 uv run vuljector selection flask codeql claude-sonnet-4-6
 ```
-
-**Best for**: SQL injection, path traversal, command injection, deserialization, XSS, SSRF.
 
 ### `llm_explore`
 
 Runs a mini-swe-agent inside the project container to autonomously explore the repo and
 identify injection candidates. Writes `/tmp/candidates.json` in PipelineOutput format.
 Works for any language.
-
-**Best for**: Novel/project-specific patterns, config-based vulnerabilities, missing context
-that requires reading multiple files simultaneously.
 
 ## Injection Strategy
 
