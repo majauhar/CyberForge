@@ -68,11 +68,20 @@ python3 -m vuljector.cli setup <project>
 
 What it does:
 
-- builds/reuses Docker image from `vuljector-projects/<project>/setup/`
-- resets repo to `secure_base_commit`
-- backs up `.git` into `runs/workspaces/<project>/.git_backup/`
-- removes `.git` from container for agent-facing phases
-- if `unit_tests/test.sh` exists, computes `unit_tests.expected_passing_count` in `project.json`
+- validates that init already produced `secure_base_commit` and `unit_tests/`
+- prefers pulling `project.json.dockerhub_image` into the local ready-image cache when configured
+- otherwise builds/reuses the Docker image from `vuljector-projects/<project>/setup/`
+- builds/reuses the local ready image and aligns it to `secure_base_commit`
+- marks setup completed in `runs/workspaces/<project>/runtime.json`
+
+### Init phase with optional Docker Hub publish
+
+```bash
+python3 -m vuljector.cli init <project> --oss-fuzz-path <path> [--publish-dockerhub-namespace vuljector]
+```
+
+When `--publish-dockerhub-namespace` is set, init also publishes a reusable setup image as
+`<namespace>/<project>:setup` and stores that image reference in `project.json` as `dockerhub_image`.
 
 ### Selection phase
 
