@@ -18,11 +18,6 @@ def reset_to_secure_commit(
     # No backup/restore needed — reset directly.
     runtime.exec(f"git config --global --add safe.directory {repo_dir}")
     if secure_base_commit:
-        # Best-effort fetch: some OSS-Fuzz images keep only shallow history, so
-        # the secure commit may not exist locally even though the repo remote can
-        # provide it. We still allow reset to proceed if the fetch fails but the
-        # commit is already present.
-        runtime.exec(f"git fetch origin {secure_base_commit}", workdir=repo_dir)
         runtime.exec(
             f"git reset --hard {secure_base_commit}",
             workdir=repo_dir,
