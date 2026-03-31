@@ -67,7 +67,6 @@ class LLMExploreStrategy(SelectionStrategy):
         candidates = _parse_candidates(project, raw_json, top_n)
 
         return SelectionResult(
-            schema_version="v2",
             project=project,
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),

@@ -70,10 +70,10 @@ Ordering constraint:
 
 ### What is mounted
 
-VulInjector source is not mounted into the project container.
+Vuljector source is not mounted into the project container.
 Only a per-run output directory is mounted (created empty for that run):
 
-- host `VulInjector/runs/(setup|selection|injection)/<project>/<run_id>/` -> container `/workspace/run/`
+- host `Vuljector/runs/(setup|selection|injection)/<project>/<run_id>/` -> container `/workspace/run/`
 
 Optional mounts can be added per strategy, but the baseline flow keeps this minimal.
 
@@ -90,7 +90,7 @@ Optional mounts can be added per strategy, but the baseline flow keeps this mini
 ```text
 Vuljector/
 │
-├── VulInjector/
+├── Vuljector/
 │   └── src/
 │       ├── vuljector/            # phase runners, CLI, shared plumbing
 │       ├── injector/             # injection strategies + interface
@@ -104,13 +104,13 @@ Vuljector/
 └── vuljector-projects/
 ```
 
-### `VulInjector/src` detailed blueprint
+### `Vuljector/src` detailed blueprint
 
 The tree above is the high-level view. This section defines the concrete scripts/modules and the
 core classes (including abstract interfaces).
 
 ```text
-VulInjector/src/
+Vuljector/src/
 │
 ├── vuljector/
 │   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, run
@@ -295,7 +295,7 @@ vuljector-projects/
 ## `runs/` Architecture
 
 ```text
-VulInjector/runs/
+Vuljector/runs/
 │
 ├── setup/
 │   └── <project>/
@@ -341,7 +341,6 @@ VulInjector/runs/
 All steps communicate through versioned JSON payloads.
 Each JSON includes:
 
-- `schema_version` (string, e.g. `"v2"`)
 - `project`
 - `run_id`
 - `timestamp_utc`
@@ -352,7 +351,6 @@ Path: `runs/setup/<project>/<setup_run_id>/setup_request.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<setup_run_id>",
   "timestamp_utc": "2026-01-01T00:00:00Z"
@@ -365,7 +363,6 @@ Path: `runs/setup/<project>/<setup_run_id>/setup_result.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<setup_run_id>",
   "timestamp_utc": "2026-01-01T00:00:20Z",
@@ -386,20 +383,12 @@ Path: `vuljector-projects/<project>/project.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
-  "source": {
-    "oss_fuzz_project_dir": "oss-fuzz/projects/flask"
-  },
-  "repos": {
-    "original_main_repo": "https://github.com/pallets/flask",
-    "forked_main_repo": "https://github.com/vuljector/flask"
-  },
+  "main_repo_url": "https://github.com/pallets/flask",
   "target_dir": "flask",
   "secure_base_commit": "<sha>",
   "unit_tests": {
     "enabled": true,
-    "script": "unit_tests/test.sh",
     "expected_passing_count": 142
   }
 }
@@ -407,6 +396,8 @@ Path: `vuljector-projects/<project>/project.json`
 
 Notes:
 
+- `main_repo_url` comes from OSS-Fuzz `project.yaml` (`main_repo`) at `init` time.
+- `target_dir` is the source location relative to `/src` inside the built image (for example `flask` or `project-parent/tika`).
 - `unit_tests` is optional. If present and `enabled=true`, verifier runs `unit_tests/test.sh`.
 - `expected_passing_count` is written during setup when the test script is first run; verification passes if the same count passes after injection.
 
@@ -416,7 +407,6 @@ Path: `runs/selection/<project>/<selection_run_id>/selection_request.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<selection_run_id>",
   "timestamp_utc": "2026-01-01T00:00:00Z",
@@ -436,7 +426,6 @@ Path: `runs/selection/<project>/<selection_run_id>/candidates.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<selection_run_id>",
   "timestamp_utc": "2026-01-01T00:00:10Z",
@@ -463,7 +452,6 @@ Path: `runs/injection/<project>/<injection_run_id>/injection_request.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<injection_run_id>",
   "timestamp_utc": "2026-01-01T00:05:00Z",
@@ -484,7 +472,6 @@ Path: `runs/injection/<project>/<injection_run_id>/injection_result.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<injection_run_id>",
   "timestamp_utc": "2026-01-01T00:06:00Z",
@@ -516,7 +503,6 @@ Path: `runs/injection/<project>/<injection_run_id>/verification_result.json`
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "run_id": "<injection_run_id>",
   "timestamp_utc": "2026-01-01T00:06:20Z",
@@ -545,7 +531,6 @@ Vulnerabilities are stored as snapshots of modified files.
 
 ```json
 {
-  "schema_version": "v2",
   "project": "flask",
   "vulnerability_id": "vulnerability_12",
   "files": [
@@ -564,7 +549,6 @@ Path: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/vulnerabilit
 
 ```json
 {
-  "schema_version": "v2",
   "id": "vulnerability_12",
   "project": "flask",
   "cwe_group": "Input Validation",

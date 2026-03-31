@@ -44,7 +44,6 @@ def build_snapshot_from_container(
             runtime.copy_from(f"{repo_dir}/{repo_path}", host_target)
 
     manifest = SnapshotManifest(
-        schema_version="v2",
         project=project,
         vulnerability_id=vulnerability_id,
         files=files,

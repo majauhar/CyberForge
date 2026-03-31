@@ -25,15 +25,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Vuljector V2 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="Create project.json from oss-fuzz metadata")
+    p_init = sub.add_parser("init", help="Initialize project: metadata, image, commit, test harness")
     p_init.add_argument("project", help="OSS-Fuzz project name (must exist under oss-fuzz/projects/)")
     p_init.add_argument("--oss-fuzz-path", required=True, help="Path to oss-fuzz checkout")
     p_init.add_argument("--target-dir", default=None,
                         help="Source subdirectory under /src/ in container (default: project name)")
+    p_init.add_argument("--model-id", default="claude-sonnet-4-6",
+                        help="Model for test discovery agent fallback")
+    p_init.add_argument("--publish-dockerhub-namespace", default=None,
+        help="Optional Docker Hub namespace/org to publish <namespace>/<project>:setup during init")
 
-    p_setup = sub.add_parser("setup", help="Run setup phase")
+    p_setup = sub.add_parser("setup", help="Build/cache image and ready container for local use")
     p_setup.add_argument("project")
-    p_setup.add_argument("--model-id", default="claude-sonnet-4-6", help="Model for test discovery agent")
 
     p_sel = sub.add_parser("selection", help="Run selection phase")
     p_sel.add_argument("project")
@@ -83,9 +86,11 @@ def main() -> None:
                 args.project,
                 oss_fuzz_path=args.oss_fuzz_path,
                 target_dir=args.target_dir,
+                model_id=args.model_id,
+                publish_dockerhub_namespace=args.publish_dockerhub_namespace,
             )
         elif args.command == "setup":
-            payload = run_setup(args.project, model_id=args.model_id)
+            payload = run_setup(args.project)
         elif args.command == "selection":
             payload = run_selection(
                 project=args.project,
@@ -139,4 +144,3 @@ def _run_convenience(args: argparse.Namespace) -> dict:
 
 if __name__ == "__main__":
     main()
-

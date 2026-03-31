@@ -1,4 +1,4 @@
-"""Data classes for VulInjector agent results.
+"""Data classes for Vuljector agent results.
 
 Five-layer structure:
 
@@ -100,7 +100,7 @@ class VulnPatch:
     file_path: str              # absolute container path of the patched file
     function: str
     cwe_candidates: list[str]   # e.g. ['CWE-476', 'CWE-787']
-    injection_hint: str         # the strategy hint from VulInjector
+    injection_hint: str         # the strategy hint from Vuljector
 
     # ── The patch ─────────────────────────────────────────────────────────────
     patch_diff: str             # unified diff output (empty string if failed)

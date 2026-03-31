@@ -49,7 +49,6 @@ def run_verification(
 
     def _make_result(status, checks, failure_cause, failure_message) -> VerificationResult:
         return VerificationResult(
-            schema_version="v2",
             project=project,
             run_id=run_id,
             timestamp_utc=utc_now_iso(),

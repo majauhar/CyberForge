@@ -61,12 +61,12 @@ class CodeQLStrategy(SelectionStrategy):
         logger.info("CodeQL CLI found at %s", cli)
 
         # Clone repo if not already present (mirrors static_analysis.setup)
-        url = (getattr(runtime, "repos", {}) or {}).get(runtime.target_dir, "")
+        url = getattr(runtime, "main_repo_url", "") or ""
         if not url:
             logger.warning(
-                "[%s] No repo URL in runtime.repos for target_dir=%r — "
+                "[%s] No main_repo_url set — "
                 "CodeQL analysis may fail if source is not on host.",
-                runtime.project, runtime.target_dir,
+                runtime.project,
             )
             return
 
@@ -177,7 +177,7 @@ def _resolve_repo_path(runtime: ContainerRuntime, request: Any) -> Path:
             return candidate
 
         # Lazy clone
-        url = (getattr(runtime, "repos", {}) or {}).get(target_dir, "")
+        url = getattr(runtime, "main_repo_url", "") or ""
         if url:
             logger.info("[%s] Cloning %s → %s", runtime.project, url, candidate)
             subprocess.run(["git", "clone", url, str(candidate)], check=True)
@@ -189,7 +189,7 @@ def _resolve_repo_path(runtime: ContainerRuntime, request: Any) -> Path:
 
     raise RuntimeError(
         f"Cannot resolve repo path for target_dir={target_dir!r}. "
-        "Ensure repos[target_dir] is set in project.json."
+        "Ensure main_repo_url is set in project.json."
     )
 
 

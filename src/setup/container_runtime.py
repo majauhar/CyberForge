@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from setup.dockerhub_image import pull_ready_image
 
 
 @dataclass
@@ -34,8 +35,7 @@ class ContainerRuntime:
         target_dir: str,
         secure_base_commit: str,
         workspace_dir: Path,
-        oss_fuzz_path: Path | None = None,
-        repos: dict | None = None,
+        main_repo_url: str = "",
         dockerhub_image: str | None = None,
         language: str | None = None,
     ) -> None:
@@ -44,22 +44,15 @@ class ContainerRuntime:
         self.target_dir = target_dir
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
-        self.oss_fuzz_path = oss_fuzz_path
-        self.repos: dict = repos or {}
+        self.main_repo_url = main_repo_url
         self.dockerhub_image: str | None = dockerhub_image
         self.language: str | None = language
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()
 
-        if oss_fuzz_path is not None:
-            # OSS-Fuzz mode: hash the project's Dockerfile + build.sh from oss-fuzz
-            oss_proj_dir = oss_fuzz_path / "projects" / project
-            self.setup_hash = self._compute_setup_hash(oss_proj_dir if oss_proj_dir.exists() else setup_dir)
-            self.image_tag = f"gcr.io/oss-fuzz/{project}"
-        else:
-            self.setup_hash = self._compute_setup_hash(self.setup_dir)
-            self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
+        self.setup_hash = self._compute_setup_hash(self.setup_dir)
+        self.image_tag = self.meta.get("image_tag") or f"vuljector/{project}:{self.setup_hash[:12]}"
 
         self.repo_dir_in_container = f"/src/{target_dir}"
         self.container_name = ""
@@ -126,7 +119,73 @@ class ContainerRuntime:
         self.meta["ready_image_tag"] = tag
         self._save_meta()
 
+    def sync_ready_image_to_secure_commit(self) -> None:
+        """
+        Re-commit the ready image after aligning the repo checkout to
+        secure_base_commit.
+
+        This keeps setup-produced images in a predictable baseline state even
+        when the upstream image was built from a shallow clone.
+        """
+        if not self.secure_base_commit:
+            return
+        self.build_ready_image()
+        import uuid
+        tag = self.ready_image_tag
+        container_name = f"vuljector-{self.project}-secure-{uuid.uuid4().hex[:8]}"
+        try:
+            start = subprocess.run(
+                ["docker", "run", "-d", "--name", container_name, tag, "sleep", "infinity"],
+                capture_output=True, text=True,
+            )
+            if start.returncode != 0:
+                raise RuntimeError(
+                    f"docker run for secure ready image failed: {(start.stderr or start.stdout).strip()}"
+                )
+            subprocess.run(
+                ["docker", "exec", container_name, "git", "config", "--global", "--add", "safe.directory", "*"],
+                capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 f"cd {self.repo_dir_in_container} && git fetch origin {self.secure_base_commit}"],
+                capture_output=True, text=True,
+            )
+            reset = subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 f"cd {self.repo_dir_in_container} && git reset --hard {self.secure_base_commit} && git clean -fdx"],
+                capture_output=True, text=True,
+            )
+            if reset.returncode != 0:
+                raise RuntimeError(
+                    "secure commit reset failed: "
+                    f"{(reset.stderr or reset.stdout).strip()}"
+                )
+            commit = subprocess.run(
+                ["docker", "commit", container_name, tag],
+                capture_output=True, text=True,
+            )
+            if commit.returncode != 0:
+                raise RuntimeError(
+                    f"docker commit failed: {(commit.stderr or commit.stdout).strip()}"
+                )
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name],
+                           capture_output=True, text=True)
+
     def ensure_image(self) -> None:
+        if self.dockerhub_image and (
+            self.meta.get("ready_hash") != self.setup_hash or not self._image_exists(self.ready_image_tag)
+        ):
+            try:
+                pull_ready_image(source_image=self.dockerhub_image, target_image=self.ready_image_tag)
+                self.meta["setup_hash"] = self.setup_hash
+                self.meta["ready_hash"] = self.setup_hash
+                self.meta["ready_image_tag"] = self.ready_image_tag
+                self._save_meta()
+                return
+            except Exception:
+                pass
         if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(self.image_tag):
             self._build_image(self.image_tag)
             self.meta["setup_hash"] = self.setup_hash
@@ -155,7 +214,7 @@ class ContainerRuntime:
             self.container_name,
             "-v",
             f"{run_mount_dir}:/workspace/run",
-            self.image_tag,
+            self.active_image_tag,
             "sleep",
             "infinity",
         ]
@@ -242,32 +301,13 @@ class ContainerRuntime:
         return bool(self.meta.get("setup_completed"))
 
     def _build_image(self, image_tag: str) -> None:
-        if self.oss_fuzz_path is not None:
-            # OSS-Fuzz: build via infra/helper.py build_image --no-pull <project>
-            helper = self.oss_fuzz_path / "infra" / "helper.py"
-            if not helper.exists():
-                raise RuntimeError(
-                    f"OSS-Fuzz helper.py not found: {helper}\n"
-                    "Clone OSS-Fuzz: git clone https://github.com/google/oss-fuzz"
-                )
-            cmd = [sys.executable, str(helper), "build_image", "--no-pull", self.project]
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.oss_fuzz_path),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout).strip()[-800:]
-                raise RuntimeError(f"helper.py build_image failed: {err}")
-        else:
-            result = subprocess.run(
-                ["docker", "build", "-t", image_tag, str(self.setup_dir)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
+        result = subprocess.run(
+            ["docker", "build", "-t", image_tag, str(self.setup_dir)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
 
     @staticmethod
     def _image_exists(image_tag: str) -> bool:

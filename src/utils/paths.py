@@ -11,11 +11,11 @@ def src_root() -> Path:
 
 
 def workspace_root() -> Path:
-    # src/ is under VulInjector/, which is sibling of vuljector-projects/.
+    # src/ is under Vuljector/, which is sibling of vuljector-projects/.
     return src_root().parents[1]
 
 
-def vulinjector_root() -> Path:
+def vuljector_root() -> Path:
     return src_root().parents[0]
 
 
@@ -24,7 +24,7 @@ def projects_root() -> Path:
 
 
 def runs_root() -> Path:
-    return vulinjector_root() / "runs"
+    return vuljector_root() / "runs"
 
 
 def workspaces_root() -> Path:
@@ -42,6 +42,10 @@ def workspace_for_project(project: str) -> Path:
 def new_run_id(prefix: str) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}_{ts}"
+
+
+def init_run_dir(project: str, run_id: str) -> Path:
+    return runs_root() / "init" / project / run_id
 
 
 def setup_run_dir(project: str, run_id: str) -> Path:
