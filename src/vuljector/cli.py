@@ -32,8 +32,6 @@ def main() -> None:
                         help="Source subdirectory under /src/ in container (default: project name)")
     p_init.add_argument("--model-id", default="claude-sonnet-4-6",
                         help="Model for test discovery agent fallback")
-    p_init.add_argument("--publish-dockerhub-namespace", default=None,
-        help="Optional Docker Hub namespace/org to publish <namespace>/<project>:setup during init")
 
     p_setup = sub.add_parser("setup", help="Build/cache image and ready container for local use")
     p_setup.add_argument("project")
@@ -87,7 +85,6 @@ def main() -> None:
                 oss_fuzz_path=args.oss_fuzz_path,
                 target_dir=args.target_dir,
                 model_id=args.model_id,
-                publish_dockerhub_namespace=args.publish_dockerhub_namespace,
             )
         elif args.command == "setup":
             payload = run_setup(args.project)
@@ -144,3 +141,4 @@ def _run_convenience(args: argparse.Namespace) -> dict:
 
 if __name__ == "__main__":
     main()
+

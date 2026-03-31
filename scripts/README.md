@@ -47,26 +47,7 @@ python scripts/select_projects.py --total 100 --out my_selection.json
 
 # point at a different CSV
 python scripts/select_projects.py --csv scripts/oss_fuzz_full.csv --total 50
-
-# exclude already initialized projects
-python scripts/select_projects.py \
-  --csv scripts/oss_fuzz_full.csv \
-  --total 200 \
-  --exclude-dir /home/anl31/documents/code/vuljector/vuljector-projects \
-  --out scripts/selected_projects.json
-
-# exclude a previous selection JSON to produce a non-overlapping next batch
-python scripts/select_projects.py \
-  --csv scripts/oss_fuzz_full.csv \
-  --total 200 \
-  --exclude-json scripts/selected_projects.json \
-  --out scripts/selected_projects_next.json
 ```
-
-`--exclude-dir` and `--exclude-json` are related but not redundant:
-
-- `--exclude-dir` skips projects that already exist as subdirectories under a local workspace such as `vuljector-projects/`.
-- `--exclude-json` skips names from an earlier selection file, which is useful before those projects have been initialized or when you want a second non-overlapping batch.
 
 ### Output
 
@@ -97,4 +78,4 @@ Each entry includes `name`, `github_slug`, `main_repo`, `language`, `domains`, `
 }
 ```
 
-The output file can then be fed directly to batch pipeline runs via `scripts/batch_init.sh`.
+The output file can then be fed directly to batch pipeline runs via `vuljector init`.

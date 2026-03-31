@@ -38,13 +38,6 @@ def run_setup(project: str) -> dict:
         except Exception as exc:
             logger.warning("[%s] Ready image build failed (non-fatal): %s", project, exc)
 
-    try:
-        logger.info("[%s] Aligning ready image to secure commit %s ...", project, config.secure_base_commit)
-        runtime.sync_ready_image_to_secure_commit()
-        logger.info("[%s] Ready image synced to secure commit.", project)
-    except Exception as exc:
-        logger.warning("[%s] Secure commit sync failed (non-fatal): %s", project, exc)
-
     runtime.mark_setup_completed(True)
 
     result = {
