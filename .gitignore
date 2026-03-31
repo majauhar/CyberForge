@@ -426,6 +426,7 @@ FodyWeavers.xsd
 test_results/
 results/
 vuljector-projects/
+scripts/test_vuljector/evals/
 
 # Claude Code local session state
 .claude/

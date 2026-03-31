@@ -1,0 +1,20 @@
+{
+  "timestamp": "20260331T142327",
+  "selection_strategy": "static_analysis",
+  "injection_model": "azure/gpt-5.3-codex",
+  "selection_model": "azure/gpt-5.3-codex",
+  "max_candidates": 10,
+  "num_vulns": 5,
+  "parallel": 9,
+  "projects": [
+    "flask",
+    "requests",
+    "sqlparse",
+    "jsoncpp",
+    "c-ares",
+    "quickjs",
+    "js-yaml",
+    "fastify",
+    "protobuf-js"
+  ]
+}

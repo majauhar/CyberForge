@@ -1,0 +1,10 @@
+projects
+flask
+requests
+sqlparse
+jsoncpp
+c-ares
+quickjs
+js-yaml
+fastify
+protobuf-js

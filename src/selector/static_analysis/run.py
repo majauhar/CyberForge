@@ -87,6 +87,10 @@ class StaticAnalysisStrategy(SelectionStrategy):
                 or (not cwe_groups or c.cwe_group in cwe_groups)
             ]
 
+        max_cand = getattr(request, "max_candidates", None)
+        if max_cand is not None:
+            candidates = candidates[:max_cand]
+
         return SelectionResult(
             project=request.project,
             run_id=request.run_id,
