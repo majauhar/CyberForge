@@ -10,6 +10,7 @@ Hard filters  (project is dropped if any fail):
   1. has_dockerfile = Yes          can't build without it
   2. language ∈ {python, c, c++, javascript}
   3. 4,000 ≤ LOC ≤ 1,000,000      too small / too large for the pipeline
+     (skipped for JS when --js-all is set)
   4. has_asan = Yes  (c / c++ only)  exploit oracle requires a sanitizer
                       JavaScript projects use a different runtime model and
                       never carry ASAN, so they are exempt from this check.
@@ -38,22 +39,33 @@ Quotas:
   supply.  The final total will always equal N unless the entire candidate
   pool is smaller than N.
 
+  With --js-all: ALL JavaScript candidates are taken first (no LOC filter,
+  no quota cap); remaining slots are filled by Python/C/C++ under normal rules.
+
 USAGE
 -----
   python select_projects.py
   python select_projects.py --total 300 --out selected.json
+  python select_projects.py --total 200 --js-all --exclude-dir /path/to/vuljector-projects
+  python select_projects.py --total 200 --exclude-dir /path/to/vuljector-projects \
+      --exclude-json previous_selection.json
 
 OPTIONS
 -------
-  --csv     Path to oss_fuzz_full.csv   [oss_fuzz_full.csv]
-  --out     Output JSON path            [selected_projects.json]
-  --total   Total projects to select    [300]
+  --csv         Path to oss_fuzz_full.csv        [oss_fuzz_full.csv]
+  --out         Output JSON path                 [selected_projects.json]
+  --total       Total projects to select         [300]
+  --js-all      Take ALL JavaScript projects (bypass LOC filter for JS,
+                no quota cap; remaining slots filled by Python/C/C++)
+  --exclude-dir Directory whose subdirectory names are project names to skip
+  --exclude-json JSON file with a top-level "projects" array whose "name"
+                values should be skipped
 """
 
 import argparse
 import csv
 import json
-import math
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Optional
@@ -170,16 +182,18 @@ def parse_row(row: dict) -> Project:
 # Hard filters
 # ─────────────────────────────────────────────────────────────────────────────
 
-def hard_filter(p: Project) -> Optional[str]:
+def hard_filter(p: Project, js_all: bool = False) -> Optional[str]:
     """Return rejection reason string, or None if the project passes."""
     if not p.has_dockerfile:
         return "no dockerfile"
     if p.lang_group == "other":
         return f"language '{p.language}' not in target set"
-    if p.loc is not None and p.loc < LOC_FLOOR:
-        return f"loc {p.loc:,} < floor {LOC_FLOOR:,}"
-    if p.loc is not None and p.loc > LOC_CEIL:
-        return f"loc {p.loc:,} > ceiling {LOC_CEIL:,}"
+    skip_loc = js_all and p.lang_group == "javascript"
+    if not skip_loc:
+        if p.loc is not None and p.loc < LOC_FLOOR:
+            return f"loc {p.loc:,} < floor {LOC_FLOOR:,}"
+        if p.loc is not None and p.loc > LOC_CEIL:
+            return f"loc {p.loc:,} > ceiling {LOC_CEIL:,}"
     if p.language not in ASAN_NOT_APPLICABLE and not p.has_asan:
         return "no ASAN (required for c/c++ exploit oracle)"
     return None
@@ -260,9 +274,13 @@ def compute_quotas(total_n: int, supply: dict) -> dict:
     return quotas
 
 
-def select(candidates: list, total_n: int) -> tuple:
+def select(candidates: list, total_n: int, js_all: bool = False) -> tuple:
     """
     Three-pass constrained selection.  Returns (selected, quotas).
+
+    When js_all=True: all JS candidates are taken first (no quota cap),
+    then remaining slots (total_n - len(js)) are filled from Python/C/C++
+    using the normal quota + domain-minimum logic.
 
     Pass 1 — domain minimums
       Guarantee DOMAIN_MINIMUMS coverage.  Picks the highest-priority
@@ -276,10 +294,6 @@ def select(candidates: list, total_n: int) -> tuple:
       in normal operation), fill any remaining slots by pure priority
       order regardless of language group.
     """
-    # Compute supply per group
-    supply    = Counter(p.lang_group for p in candidates)
-    quotas    = compute_quotas(total_n, dict(supply))
-
     # Sort all candidates globally by priority
     pool      = sorted(candidates, key=priority_key)
     selected  = []
@@ -294,6 +308,47 @@ def select(candidates: list, total_n: int) -> tuple:
         group_ct[p.lang_group] += 1
         for d in p.domains:
             domain_ct[d] += 1
+
+    if js_all:
+        # Take ALL JS candidates first; remaining budget goes to Python/C/C++
+        for p in pool:
+            if p.lang_group == "javascript":
+                accept(p, "js_all")
+        remaining_n = total_n - len(selected)
+        non_js = [p for p in pool if p.lang_group != "javascript"]
+        supply = Counter(p.lang_group for p in non_js)
+        quotas = compute_quotas(remaining_n, dict(supply))
+
+        def has_room(p: Project) -> bool:
+            return group_ct[p.lang_group] < quotas.get(p.lang_group, 0)
+
+        # Pass 1: domain minimums (non-JS only)
+        for domain, minimum in sorted(DOMAIN_MINIMUMS.items(), key=lambda x: -x[1]):
+            for p in non_js:
+                if domain_ct[domain] >= minimum:
+                    break
+                if p.name not in seen and domain in p.domains and has_room(p):
+                    accept(p, f"domain_min:{domain}")
+
+        # Pass 2: fill language quotas
+        for p in non_js:
+            if p.name not in seen and has_room(p):
+                accept(p, f"quota:{p.lang_group}")
+
+        # Pass 3: top-up
+        for p in non_js:
+            if len(selected) >= total_n:
+                break
+            if p.name not in seen:
+                accept(p, "topup")
+
+        # Include JS in quotas dict for reporting
+        quotas["javascript"] = group_ct["javascript"]
+        return selected, quotas
+
+    # ── Normal mode ───────────────────────────────────────────────────────────
+    supply    = Counter(p.lang_group for p in candidates)
+    quotas    = compute_quotas(total_n, dict(supply))
 
     def has_room(p: Project) -> bool:
         return group_ct[p.lang_group] < quotas.get(p.lang_group, 0)
@@ -319,36 +374,6 @@ def select(candidates: list, total_n: int) -> tuple:
             accept(p, "topup")
 
     return selected, quotas
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GitHub API enrichment
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _gh_request(slug: str, token: Optional[str]) -> Optional[dict]:
-    """Single GitHub API call for one slug. Returns parsed JSON or None."""
-    url = f"https://api.github.com/repos/{slug}"
-    req = urllib.request.Request(url)
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 403:
-            reset = int(e.headers.get("X-RateLimit-Reset", time.time() + 60))
-            wait  = max(reset - time.time() + 2, 1)
-            print(f"    [rate-limit] sleeping {wait:.0f}s …", flush=True)
-            time.sleep(wait)
-            return _gh_request(slug, token)   # retry once
-        if e.code != 404:
-            print(f"    [HTTP {e.code}] {slug}", flush=True)
-        return None
-    except Exception as exc:
-        print(f"    [error] {slug}: {exc}", flush=True)
-        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -448,7 +473,41 @@ def main() -> None:
                         help="Output JSON  [selected_projects.json]")
     parser.add_argument("--total", type=int, default=300,
                         help="Total projects to select  [300]")
+    parser.add_argument("--js-all", action="store_true",
+                        help="Take ALL JavaScript projects (bypass LOC filter for JS); "
+                             "remaining slots filled by Python/C/C++")
+    parser.add_argument("--exclude-dir", metavar="DIR",
+                        help="Directory whose subdirectory names are project names to skip")
+    parser.add_argument("--exclude-json", metavar="PATH",
+                        help="JSON file with previously selected projects to skip")
     args = parser.parse_args()
+
+    # ── Build exclusion set ──────────────────────────────────────────────────
+    excluded_names: set = set()
+    if args.exclude_dir:
+        try:
+            for entry in os.listdir(args.exclude_dir):
+                if os.path.isdir(os.path.join(args.exclude_dir, entry)):
+                    excluded_names.add(entry)
+            print(f"Excluding {len(excluded_names)} already-initialized projects "
+                  f"from {args.exclude_dir}")
+        except FileNotFoundError:
+            print(f"Warning: --exclude-dir '{args.exclude_dir}' not found, skipping")
+
+    if args.exclude_json:
+        try:
+            with open(args.exclude_json) as f:
+                payload = json.load(f)
+            projects = payload.get("projects", [])
+            before = len(excluded_names)
+            for item in projects:
+                name = str(item.get("name", "")).strip()
+                if name:
+                    excluded_names.add(name)
+            print(f"Excluding {len(excluded_names) - before} previously selected projects "
+                  f"from {args.exclude_json}")
+        except FileNotFoundError:
+            print(f"Warning: --exclude-json '{args.exclude_json}' not found, skipping")
 
     # ── Load CSV ──────────────────────────────────────────────────────────────
     with open(args.csv) as f:
@@ -459,7 +518,11 @@ def main() -> None:
     # ── Hard filter ───────────────────────────────────────────────────────────
     candidates, discarded = [], []
     for p in all_projects:
-        reason = hard_filter(p)
+        if p.name in excluded_names:
+            p.discard_reason = "already initialized"
+            discarded.append(p)
+            continue
+        reason = hard_filter(p, js_all=args.js_all)
         if reason:
             p.discard_reason = reason
             discarded.append(p)
@@ -476,15 +539,28 @@ def main() -> None:
     print(f"GitHub data (stars + last push) present for {enriched}/{len(candidates)} candidates")
 
     # ── Show how N will be split ───────────────────────────────────────────────
-    quotas = compute_quotas(args.total, dict(by_group))
-    print(f"\nQuota split for --total {args.total}:")
-    for g in ("python", "c_cpp", "javascript"):
-        avail = by_group.get(g, 0)
-        flag  = "  ← bottleneck, shortfall redistributed" if avail < quotas[g] else ""
-        print(f"  {g:12s}  quota={quotas[g]:3d}  available={avail:3d}{flag}")
+    if args.js_all:
+        js_count = by_group.get("javascript", 0)
+        non_js_supply = {g: v for g, v in by_group.items() if g != "javascript"}
+        preview_quotas = compute_quotas(args.total - js_count, non_js_supply)
+        preview_quotas["javascript"] = js_count
+        print(f"\nQuota split for --total {args.total} (--js-all: all {js_count} JS taken first):")
+        print(f"  {'javascript':12s}  quota={js_count:3d}  available={js_count:3d}  (all taken)")
+        for g in ("python", "c_cpp"):
+            avail = by_group.get(g, 0)
+            flag  = "  ← bottleneck, shortfall redistributed" if avail < preview_quotas.get(g, 0) else ""
+            print(f"  {g:12s}  quota={preview_quotas.get(g,0):3d}  available={avail:3d}{flag}")
+    else:
+        preview_quotas = compute_quotas(args.total, dict(by_group))
+        print(f"\nQuota split for --total {args.total}:")
+        for g in ("python", "c_cpp", "javascript"):
+            avail = by_group.get(g, 0)
+            quota = preview_quotas.get(g, 0)
+            flag  = "  ← bottleneck, shortfall redistributed" if avail < quota else ""
+            print(f"  {g:12s}  quota={quota:3d}  available={avail:3d}{flag}")
 
     # ── Select ────────────────────────────────────────────────────────────────
-    selected, quotas = select(candidates, args.total)
+    selected, quotas = select(candidates, args.total, js_all=args.js_all)
 
     # ── Report ────────────────────────────────────────────────────────────────
     print_summary(selected, discarded, quotas, args.total)

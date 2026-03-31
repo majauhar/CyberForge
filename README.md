@@ -71,6 +71,17 @@ The project name maps to:
 - `gcr.io/oss-fuzz/<project>` — Docker image tag (built locally via `helper.py`, not pulled)
 - `/src/<target_dir>` — source location inside the container
 
+For a selection JSON produced by `scripts/select_projects.py`, you can initialize many projects in one pass:
+
+```bash
+./scripts/batch_init.sh \
+  --json scripts/selected_projects.json \
+  --oss-fuzz /path/to/oss-fuzz \
+  --jobs 4
+```
+
+This writes per-project logs plus a batch summary under `runs/init/_batch_<timestamp>/`.
+
 ### Run
 
 ```bash
