@@ -51,7 +51,7 @@ The Docker image is built automatically by `setup` when needed — no manual bui
 
 ### Initialize a project
 
-`init` builds the Docker image, detects the secure base commit, discovers the test harness, and writes everything to `vuljector-projects/`. The result is a self-contained, portable project definition that can be committed and shared.
+`init` builds the Docker image, detects the secure base commit, discovers the test harness, and writes everything to `vuljector-projects/`. The result is a self-contained, portable project definition that can be committed and shared. The processed docker image can be storred to dockerhub.  
 
 ```bash
 uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
