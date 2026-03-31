@@ -90,8 +90,10 @@ class CodeQLStrategy(SelectionStrategy):
         cli = find_codeql_cli()
         repo_path = _resolve_repo_path(runtime, request)
 
-        # Detect primary language (reuse static_analysis classifier)
-        language = _detect_language(repo_path)
+        # Detect primary language — use project.json "language" override if set,
+        # otherwise fall back to the static_analysis classifier.
+        language_override = getattr(runtime, "language", None)
+        language = language_override or _detect_language(repo_path)
         if language is None:
             logger.warning(
                 "[%s] No CodeQL-supported language detected — returning empty results.",
@@ -111,8 +113,9 @@ class CodeQLStrategy(SelectionStrategy):
         runs_dir = repo_path.parent.parent.parent  # workspace/<project>/<target> → runs/
         db_root = get_db_root(runs_dir)
 
-        # Optional build command from project config (for C/C++)
+        # Optional build command / Docker image from project config (for C/C++)
         build_command = _get_build_command(runtime)
+        docker_image = getattr(runtime, "dockerhub_image", None)
 
         # Create or reuse database
         db_path = create_or_reuse_db(
@@ -122,6 +125,7 @@ class CodeQLStrategy(SelectionStrategy):
             db_root=db_root,
             project=runtime.project,
             build_command=build_command,
+            docker_image=docker_image,
         )
 
         # Run queries

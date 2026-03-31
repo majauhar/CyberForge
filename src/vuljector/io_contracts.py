@@ -23,6 +23,14 @@ class ProjectConfig:
     # Path to OSS-Fuzz clone. When set, image is built via
     # `infra/helper.py build_image` and tagged as gcr.io/oss-fuzz/<project>.
     oss_fuzz_path: str | None = None
+    # Pre-built Docker image for C/C++ CodeQL DB creation (e.g. "vuljector/PROJECT:setup").
+    # When set, the CodeQL DB build runs inside this container so the project's
+    # compiler toolchain is available.
+    dockerhub_image: str | None = None
+    # Explicit language override for CodeQL analysis (e.g. "cpp", "python", "javascript").
+    # Overrides the auto-detected language when the classifier picks the wrong language
+    # (e.g. a C project with large TypeScript bindings classified as javascript).
+    language: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

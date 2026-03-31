@@ -24,6 +24,8 @@ def load_project_config(project: str) -> ProjectConfig:
         source=dict(payload.get("source", {})),
         unit_tests=payload.get("unit_tests"),
         oss_fuzz_path=payload.get("oss_fuzz_path") or None,
+        dockerhub_image=payload.get("dockerhub_image") or None,
+        language=payload.get("language") or None,
     )
 
 
@@ -41,6 +43,8 @@ def build_runtime(config: ProjectConfig) -> ContainerRuntime:
         workspace_dir=workspace_for_project(config.project),
         oss_fuzz_path=oss_fuzz,
         repos=config.repos,
+        dockerhub_image=config.dockerhub_image,
+        language=config.language,
     )
 
 

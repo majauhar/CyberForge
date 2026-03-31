@@ -36,6 +36,8 @@ class ContainerRuntime:
         workspace_dir: Path,
         oss_fuzz_path: Path | None = None,
         repos: dict | None = None,
+        dockerhub_image: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
@@ -44,6 +46,8 @@ class ContainerRuntime:
         self.workspace_dir = workspace_dir
         self.oss_fuzz_path = oss_fuzz_path
         self.repos: dict = repos or {}
+        self.dockerhub_image: str | None = dockerhub_image
+        self.language: str | None = language
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()

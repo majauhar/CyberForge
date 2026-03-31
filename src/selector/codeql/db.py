@@ -8,7 +8,21 @@ import logging
 import subprocess
 from pathlib import Path
 
+from selector.codeql.installer import codeql_version, docker_image_arch, ensure_linux_codeql_zip
+
 logger = logging.getLogger(__name__)
+
+# Fallback Docker image for C/C++ DB creation when no project-specific image is
+# configured.  Used when dockerhub_image is not set in project.json.
+# The generic ubuntu image does not have build tools pre-installed, so the
+# Docker command installs them inline.  This is cached by the DB hash check so
+# it only runs when the source changes.
+_DEFAULT_CPP_BUILD_IMAGE = "ubuntu:22.04"
+
+# apt packages installed in the default build image before running CodeQL autobuild.
+_DEFAULT_CPP_APT_DEPS = (
+    "build-essential cmake make autoconf automake libtool git pkg-config ninja-build"
+)
 
 # Maps Vuljector language labels to CodeQL language identifiers
 _LANG_TO_CODEQL: dict[str, str] = {
@@ -84,6 +98,7 @@ def create_or_reuse_db(
     db_root: Path,
     project: str,
     build_command: list[str] | None = None,
+    docker_image: str | None = None,
 ) -> Path:
     """
     Create a CodeQL database for the given source root, or reuse an existing
@@ -97,6 +112,9 @@ def create_or_reuse_db(
         project:       Project name (used to namespace the database path).
         build_command: Optional build command for compiled languages (C/C++).
                        If None, CodeQL uses its auto-builder.
+        docker_image:  Optional Docker image to use for C/C++ DB creation.
+                       When set, the DB is built inside the container so the
+                       project's compiler toolchain is available.
 
     Returns:
         Path to the created/reused database directory.
@@ -121,28 +139,78 @@ def create_or_reuse_db(
         project, codeql_lang, db_path,
     )
 
-    cmd: list[str] = [
-        str(cli), "database", "create",
-        str(db_path),
-        f"--language={codeql_lang}",
-        f"--source-root={source_root}",
-        "--overwrite",
-    ]
+    if codeql_lang == "cpp" and not build_command:
+        # C/C++ always runs inside Docker — never on the host.
+        # The host macOS CodeQL bundle cannot run in a Linux container, so we
+        # download (once, cached) the matching Linux CodeQL bundle and mount it.
+        # Inspect the image to get its arch, download the matching CodeQL zip
+        # once to the host cache, then mount it into the container.
+        # All oss-fuzz-based project images are amd64; ubuntu:22.04 is arm64
+        # on Apple Silicon — inspect tells us which without guessing.
+        version = codeql_version(cli)
+        image = docker_image or _DEFAULT_CPP_BUILD_IMAGE
+        arch = docker_image_arch(image)
+        zip_path = ensure_linux_codeql_zip(version, arch)
+        db_path.mkdir(parents=True, exist_ok=True)
 
-    if build_command:
-        cmd += ["--", *build_command]
-    elif codeql_lang == "cpp":
-        # For C/C++ without an explicit build command, try the auto-builder.
-        # This succeeds for simple Makefile/CMake projects.
-        cmd.append("--build-mode=autobuild")
+        if docker_image:
+            setup_cmd = "apt-get update -qq && apt-get install -y --no-install-recommends unzip && "
+        else:
+            setup_cmd = (
+                f"apt-get update -qq && "
+                f"apt-get install -y --no-install-recommends {_DEFAULT_CPP_APT_DEPS} unzip && "
+            )
+
+        codeql_shell_cmd = (
+            f"{setup_cmd}"
+            f"unzip -q /tmp/codeql.zip -d /tmp && "
+            f"/tmp/codeql/codeql database create /db "
+            f"--language=cpp --source-root=/src --build-mode=autobuild --overwrite"
+        )
+
+        cmd: list[str] = [
+            "docker", "run", "--rm",
+            "-v", f"{source_root}:/src",
+            "-v", f"{zip_path}:/tmp/codeql.zip:ro",
+            "-v", f"{db_path}:/db",
+            image,
+            "sh", "-c", codeql_shell_cmd,
+        ]
+    else:
+        cmd = [
+            str(cli), "database", "create",
+            str(db_path),
+            f"--language={codeql_lang}",
+            f"--source-root={source_root}",
+            "--overwrite",
+        ]
+
+        if build_command:
+            cmd += ["--", *build_command]
+        elif codeql_lang == "javascript":
+            # JS/TS is interpreted — no build step needed.
+            cmd.append("--build-mode=none")
+
+    # For JavaScript/TypeScript extraction without Node.js on the host, tell
+    # CodeQL to use basic (parse-only) TypeScript mode instead of full type
+    # resolution.  Full resolution requires Node.js; basic still extracts all
+    # TS files as JavaScript and supports taint tracking.
+    # If Node.js is available on PATH, CodeQL ignores this and uses full mode.
+    env = None
+    if codeql_lang == "javascript":
+        import os
+        env = {**os.environ, "LGTM_INDEX_TYPESCRIPT": "basic"}
 
     logger.debug("[%s] CodeQL DB create command: %s", project, " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     if result.returncode != 0:
+        # stdout is often megabytes of apt-get/scc JSON noise — skip it.
+        # Keep only the last 40 lines of stderr where the real error lives.
+        stderr_tail = "\n".join(result.stderr.splitlines()[-40:])
         raise RuntimeError(
             f"CodeQL database creation failed for {project!r} ({codeql_lang}).\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            f"{stderr_tail}"
         )
 
     _write_db_meta(db_path, src_hash)
