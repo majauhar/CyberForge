@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import subprocess
 from pathlib import Path
 
+from setup.oss_fuzz_project import infer_target_dir
 from setup.setup_test_harness import (
     copy_default_parser_template,
     run_baseline_unit_tests,
@@ -15,6 +15,7 @@ from setup.setup_test_harness import (
     try_heuristic_harness,
     validate_unit_tests_dir,
 )
+from setup.dockerhub_image import dockerhub_image_ref, publish_ready_image
 from utils.json_io import write_json
 from utils.paths import init_run_dir, new_run_id, project_root
 from vuljector.core import build_runtime, load_project_config
@@ -29,6 +30,7 @@ def run_init(
     oss_fuzz_path: str,
     target_dir: str | None = None,
     model_id: str = "claude-sonnet-4-6",
+    publish_dockerhub_namespace: str | None = None,
 ) -> dict:
     oss_fuzz = Path(oss_fuzz_path).resolve()
     proj_dir = oss_fuzz / "projects" / project
@@ -39,7 +41,7 @@ def run_init(
         )
 
     repo_url = _main_repo_url(proj_dir)
-    resolved_target_dir = target_dir or _infer_target_dir(proj_dir, repo_url, project)
+    resolved_target_dir = target_dir or infer_target_dir(proj_dir, repo_url, project)
 
     out_dir = project_root(project)
     cfg_path = out_dir / "project.json"
@@ -103,6 +105,20 @@ def run_init(
         "enabled": unit_tests_enabled,
         "expected_passing_count": expected_count,
     }
+
+    if publish_dockerhub_namespace:
+        image_ref = dockerhub_image_ref(namespace=publish_dockerhub_namespace, project=project)
+        runtime.build_ready_image()
+        runtime.sync_ready_image_to_secure_commit()
+        publish_ready_image(
+            source_image=runtime.ready_image_tag,
+            image_ref=image_ref,
+            repo_dir=runtime.repo_dir_in_container,
+            secure_base_commit=commit,
+            unit_tests_dir=unit_tests_dir,
+        )
+        payload["dockerhub_image"] = image_ref
+
     write_json(cfg_path, payload)
 
     return {
@@ -111,6 +127,7 @@ def run_init(
         "config_path": str(cfg_path),
         "target_dir": resolved_target_dir,
         "secure_base_commit": commit,
+        "dockerhub_image": payload.get("dockerhub_image", ""),
         "unit_tests": payload["unit_tests"],
     }
 
@@ -139,56 +156,3 @@ def _main_repo_url(oss_fuzz_project_dir: Path) -> str:
                 return url
             raise ValueError(f"Empty main_repo in {yaml_path}")
     raise ValueError(f"No main_repo in {yaml_path}")
-
-
-def _infer_target_dir(oss_fuzz_project_dir: Path, repo_url: str, default: str) -> str:
-    dockerfile = oss_fuzz_project_dir / "Dockerfile"
-    if not dockerfile.exists():
-        return default
-
-    text = dockerfile.read_text(encoding="utf-8")
-    joined = re.sub(r"\\\s*\n", " ", text)
-    main_norm = _normalize_repo_url(repo_url)
-    clone_re = re.compile(
-        r"git\s+clone\s+(?:(?:--[^\s=]+(?:=[^\s]+)?|-[A-Za-z])\s+[^\s]+\s+|(?:--[^\s=]+(?:=[^\s]+)?|-[A-Za-z])\s+)*([^\s]+)(?:\s+([^\s;&|]+))?",
-        re.IGNORECASE,
-    )
-    for line in joined.splitlines():
-        for m in clone_re.finditer(line):
-            clone_url = _normalize_repo_url(m.group(1))
-            if clone_url != main_norm:
-                continue
-            dest = (m.group(2) or "").strip().strip("'\"")
-            if dest:
-                return _target_dir_from_dest(dest, default)
-            return _repo_basename(repo_url) or default
-    return default
-
-
-def _normalize_repo_url(url: str) -> str:
-    u = url.strip().strip("'\"").rstrip("/")
-    if u.endswith(".git"):
-        u = u[:-4]
-    if u.startswith("git@") and ":" in u:
-        host, path = u[4:].split(":", 1)
-        return f"{host}/{path}".lower()
-    return u.lower()
-
-
-def _repo_basename(url: str) -> str:
-    cleaned = url.strip().strip("'\"").rstrip("/")
-    if cleaned.endswith(".git"):
-        cleaned = cleaned[:-4]
-    return cleaned.rsplit("/", 1)[-1]
-
-
-def _target_dir_from_dest(dest: str, default: str) -> str:
-    rel = dest.strip().strip("'\"").rstrip("/")
-    for prefix in ("$SRC/", "${SRC}/", "/src/"):
-        if rel.startswith(prefix):
-            rel = rel[len(prefix):]
-            break
-    if rel.startswith("./"):
-        rel = rel[2:]
-    rel = rel.lstrip("/")
-    return rel or default

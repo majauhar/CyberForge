@@ -24,6 +24,7 @@ def load_project_config(project: str) -> ProjectConfig:
         target_dir=target_dir,
         secure_base_commit=str(payload.get("secure_base_commit", "")),
         main_repo_url=main_repo_url,
+        dockerhub_image=str(payload.get("dockerhub_image", "")),
         unit_tests=payload.get("unit_tests"),
     )
 
@@ -44,6 +45,8 @@ def validate_project_config(config: ProjectConfig) -> None:
         problems.append("target_dir must be a non-empty string")
     if not isinstance(config.main_repo_url, str) or not config.main_repo_url.strip():
         problems.append("main_repo_url must be a non-empty string")
+    if not isinstance(config.dockerhub_image, str):
+        problems.append("dockerhub_image must be a string")
     if not isinstance(config.secure_base_commit, str):
         problems.append("secure_base_commit must be a string (may be empty pre-setup)")
     if config.unit_tests is not None and not isinstance(config.unit_tests, dict):
@@ -65,6 +68,7 @@ def build_runtime(config: ProjectConfig) -> ContainerRuntime:
         secure_base_commit=config.secure_base_commit,
         workspace_dir=workspace_for_project(config.project),
         main_repo_url=config.main_repo_url,
+        dockerhub_image=config.dockerhub_image,
     )
 
 
@@ -87,4 +91,3 @@ def next_vulnerability_id(base_dir: Path) -> str:
                 continue
     next_idx = max(used) + 1 if used else 0
     return f"vulnerability_{next_idx}"
-

@@ -8,6 +8,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from setup.dockerhub_image import pull_ready_image
+
 
 @dataclass
 class ExecResult:
@@ -34,6 +36,7 @@ class ContainerRuntime:
         secure_base_commit: str,
         workspace_dir: Path,
         main_repo_url: str = "",
+        dockerhub_image: str = "",
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
@@ -41,6 +44,7 @@ class ContainerRuntime:
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
         self.main_repo_url = main_repo_url
+        self.dockerhub_image = dockerhub_image
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()
@@ -113,7 +117,73 @@ class ContainerRuntime:
         self.meta["ready_image_tag"] = tag
         self._save_meta()
 
+    def sync_ready_image_to_secure_commit(self) -> None:
+        """
+        Re-commit the ready image after aligning the repo checkout to
+        secure_base_commit.
+
+        This keeps setup-produced images in a predictable baseline state even
+        when the upstream image was built from a shallow clone.
+        """
+        if not self.secure_base_commit:
+            return
+        self.build_ready_image()
+        import uuid
+        tag = self.ready_image_tag
+        container_name = f"vuljector-{self.project}-secure-{uuid.uuid4().hex[:8]}"
+        try:
+            start = subprocess.run(
+                ["docker", "run", "-d", "--name", container_name, tag, "sleep", "infinity"],
+                capture_output=True, text=True,
+            )
+            if start.returncode != 0:
+                raise RuntimeError(
+                    f"docker run for secure ready image failed: {(start.stderr or start.stdout).strip()}"
+                )
+            subprocess.run(
+                ["docker", "exec", container_name, "git", "config", "--global", "--add", "safe.directory", "*"],
+                capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 f"cd {self.repo_dir_in_container} && git fetch origin {self.secure_base_commit}"],
+                capture_output=True, text=True,
+            )
+            reset = subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 f"cd {self.repo_dir_in_container} && git reset --hard {self.secure_base_commit} && git clean -fdx"],
+                capture_output=True, text=True,
+            )
+            if reset.returncode != 0:
+                raise RuntimeError(
+                    "secure commit reset failed: "
+                    f"{(reset.stderr or reset.stdout).strip()}"
+                )
+            commit = subprocess.run(
+                ["docker", "commit", container_name, tag],
+                capture_output=True, text=True,
+            )
+            if commit.returncode != 0:
+                raise RuntimeError(
+                    f"docker commit failed: {(commit.stderr or commit.stdout).strip()}"
+                )
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name],
+                           capture_output=True, text=True)
+
     def ensure_image(self) -> None:
+        if self.dockerhub_image and (
+            self.meta.get("ready_hash") != self.setup_hash or not self._image_exists(self.ready_image_tag)
+        ):
+            try:
+                pull_ready_image(source_image=self.dockerhub_image, target_image=self.ready_image_tag)
+                self.meta["setup_hash"] = self.setup_hash
+                self.meta["ready_hash"] = self.setup_hash
+                self.meta["ready_image_tag"] = self.ready_image_tag
+                self._save_meta()
+                return
+            except Exception:
+                pass
         if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(self.image_tag):
             self._build_image(self.image_tag)
             self.meta["setup_hash"] = self.setup_hash
@@ -142,7 +212,7 @@ class ContainerRuntime:
             self.container_name,
             "-v",
             f"{run_mount_dir}:/workspace/run",
-            self.image_tag,
+            self.active_image_tag,
             "sleep",
             "infinity",
         ]
