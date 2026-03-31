@@ -36,7 +36,8 @@ class ContainerRuntime:
         secure_base_commit: str,
         workspace_dir: Path,
         main_repo_url: str = "",
-        dockerhub_image: str = "",
+        dockerhub_image: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.project = project
         self.setup_dir = setup_dir
@@ -44,7 +45,8 @@ class ContainerRuntime:
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
         self.main_repo_url = main_repo_url
-        self.dockerhub_image = dockerhub_image
+        self.dockerhub_image: str | None = dockerhub_image
+        self.language: str | None = language
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.meta_path = self.workspace_dir / "runtime.json"
         self.meta = self._load_meta()

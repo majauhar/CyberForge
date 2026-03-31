@@ -91,6 +91,7 @@ uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz --model-id claude-
 # Phase by phase (setup builds/caches the ready container locally):
 uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
+uv run vuljector selection flask codeql claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10
 uv run vuljector injection flask llm_inject claude-sonnet-4-6 \
     runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 3
@@ -105,9 +106,11 @@ uv run vuljector run flask static_analysis llm_inject claude-sonnet-4-6
 
 ## Selection Strategies
 
+Three complementary strategies. Run one or all — they find different vulnerability classes.
+
 ### `static_analysis`
 
-Runs a 7-stage static analysis pipeline on the repo (pure Python, runs on host, no container):
+Runs a 7-stage AST pipeline on the repo (pure Python, runs on host, no container):
 
 ```
 Stage 0  Classifier       Detect language, security models, FFI
@@ -119,13 +122,22 @@ Stage 5  CWE Assigner     CWE candidates + injection hint per pair
 Stage 6  Gap-fill         Crypto misuse, TOCTOU, missing-check detectors
 ```
 
-**Key design**: cross-products security checkpoints (null_check, bounds_check, auth_guard, etc.)
-with security-critical operations (eval_exec, file_op, subprocess, sql_exec, etc.). No
-pattern-library bias — uses code structure.
+### `codeql`
 
-Produces up to 500 candidates per entry point, ranked by complexity score.
+Runs CodeQL semantic analysis in three tiers. Requires `codeql` on PATH (`brew install codeql`).
+C/C++ DB creation runs inside Docker (project image from `dockerhub_image`); Python and JS/TS run on the host.
 
-**Limitation**: Python only. C/Go/Java plugins not yet implemented.
+```
+Tier 1  Taint-tracked    Provable source → sink data flow paths  (confidence 0.95–0.60)
+Tier 2  Sink-only        All dangerous sinks, no source needed    (confidence 0.70–0.75)
+Tier 3  Combinatorial    All (sink × checkpoint) pairs in fn      (confidence 0.75)
+```
+
+Supported languages: **Python, JavaScript/TypeScript, C/C++**.
+
+```bash
+uv run vuljector selection flask codeql claude-sonnet-4-6
+```
 
 ### `llm_explore`
 
