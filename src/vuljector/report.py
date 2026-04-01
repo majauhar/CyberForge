@@ -133,14 +133,44 @@ def _trajectory_stats(traj: dict[str, Any]) -> dict[str, Any]:
         return {}
     info = traj.get("info", {})
     model_stats = info.get("model_stats", {})
+    exit_status = info.get("exit_status", "?")
+    exit_message = ""
+    for message in reversed(traj.get("messages", [])):
+        if message.get("role") == "exit":
+            exit_message = str(message.get("content", "")).lower()
+            break
     return {
         "api_calls":     model_stats.get("api_calls", 0),
         "instance_cost": model_stats.get("instance_cost", 0.0),
-        "exit_status":   info.get("exit_status", "?"),
+        "exit_status":   exit_status,
+        "guardrail_refusal": (
+            exit_status == "BadRequestError"
+            and any(
+                marker in exit_message
+                for marker in ("content_filter", "content management policy", "\"jailbreak\"")
+            )
+        ),
     }
 
 
 # ── Metric collection ──────────────────────────────────────────────────────────
+
+def _sanitize_int_metric(value: Any) -> int:
+    """Convert missing/sentinel integer metrics to zero for aggregation."""
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return ivalue if ivalue >= 0 else 0
+
+
+def _sanitize_float_metric(value: Any) -> float:
+    """Convert missing/sentinel float metrics to zero for aggregation."""
+    try:
+        fvalue = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return fvalue if fvalue >= 0 else 0.0
 
 def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
     """Walk all attempt_* dirs and collect per-attempt data + rolled-up counters."""
@@ -161,10 +191,17 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
     inj_success     = 0
     inj_failure     = 0
     ver_success     = 0
+    ver_success_with_unit_tests = 0
     exploit_on_both = 0
+    exploit_failed_on_vulnerable = 0
     exv_passed      = 0
     exs_passed      = 0
     ut_failed_count = 0
+    ut_parse_error_count = 0
+    llm_guardrail_refusals = 0
+    ut_failed_and_ver_success = 0
+    ut_failed_and_exploit_on_both = 0
+    ut_failed_and_exploit_failed_on_vulnerable = 0
 
     for attempt_dir in attempt_dirs:
         inj  = _load_json(attempt_dir / "injection_result.json")
@@ -189,19 +226,33 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
 
         if ver and ver_status == "success":
             ver_success += 1
+            if checks.get("unit_tests") == "passed":
+                ver_success_with_unit_tests += 1
 
         if failure_cause == "exploit_succeeds_on_both":
             exploit_on_both += 1
+        if failure_cause == "exploit_failed_on_vulnerable":
+            exploit_failed_on_vulnerable += 1
 
         if checks.get("exploit_on_vulnerable") == "passed":
             exv_passed += 1
         if checks.get("exploit_on_secure") == "passed":
             exs_passed += 1
+        if checks.get("unit_tests") == "failed":
+            ut_failed_count += 1
+            if ver_status == "success":
+                ut_failed_and_ver_success += 1
+            if failure_cause == "exploit_succeeds_on_both":
+                ut_failed_and_exploit_on_both += 1
+            if failure_cause == "exploit_failed_on_vulnerable":
+                ut_failed_and_exploit_failed_on_vulnerable += 1
+        if checks.get("unit_tests") == "parse_error":
+            ut_parse_error_count += 1
 
-        in_tok  = usage.get("total_input_tokens", 0)
-        out_tok = usage.get("total_output_tokens", 0)
-        n_steps = usage.get("total_steps", 0)
-        cost    = usage.get("estimated_cost_usd", 0.0)
+        in_tok  = _sanitize_int_metric(usage.get("total_input_tokens", 0))
+        out_tok = _sanitize_int_metric(usage.get("total_output_tokens", 0))
+        n_steps = _sanitize_int_metric(usage.get("total_steps", 0))
+        cost    = _sanitize_float_metric(usage.get("estimated_cost_usd", 0.0))
 
         input_tokens.append(in_tok)
         output_tokens.append(out_tok)
@@ -217,6 +268,8 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
             t_format_errs = max(0, t_api_calls - n_steps)
             api_calls_all.append(t_api_calls)
             format_errors.append(t_format_errs)
+            if tstats.get("guardrail_refusal"):
+                llm_guardrail_refusals += 1
 
         ut_count   = (ver or {}).get("unit_test_passed_count") if ver else None
         ut_message = (ver or {}).get("unit_test_message", "") if ver else ""
@@ -247,8 +300,6 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
     for a in attempts:
         if a["ut_count"] is not None and ut_baseline is not None:
             a["ut_delta"] = a["ut_count"] - ut_baseline
-            if a["ut_delta"] < 0:
-                ut_failed_count += 1
         else:
             a["ut_delta"] = None
 
@@ -266,10 +317,17 @@ def _collect_injection_metrics(run_dir: Path) -> dict[str, Any]:
         "inj_success":     inj_success,
         "inj_failure":     inj_failure,
         "ver_success":     ver_success,
+        "ver_success_with_unit_tests": ver_success_with_unit_tests,
         "exploit_on_both": exploit_on_both,
+        "exploit_failed_on_vulnerable": exploit_failed_on_vulnerable,
         "exv_passed":      exv_passed,
         "exs_passed":      exs_passed,
         "ut_failed_count": ut_failed_count,
+        "ut_parse_error_count": ut_parse_error_count,
+        "llm_guardrail_refusals": llm_guardrail_refusals,
+        "ut_failed_and_ver_success": ut_failed_and_ver_success,
+        "ut_failed_and_exploit_on_both": ut_failed_and_exploit_on_both,
+        "ut_failed_and_exploit_failed_on_vulnerable": ut_failed_and_exploit_failed_on_vulnerable,
         "attempts":        attempts,
     }
 

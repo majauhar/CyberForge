@@ -15,6 +15,7 @@
 *.env
 .venv/
 runs/
+scripts/eval_vuljector/evals/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
