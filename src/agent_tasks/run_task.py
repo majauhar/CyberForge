@@ -35,6 +35,7 @@ def run_agent_on_task(
         (AgentResponse, trajectory_path)
     """
     setup_commands = _build_setup_commands(runtime, spec)
+    post_commands = _build_post_commands(runtime, spec)
     prompt = _build_prompt(spec)
     extract_paths = [spec.task_type.agent_output_container_path]
     trajectory_path = run_dir / "trajectory.json"
@@ -48,6 +49,7 @@ def run_agent_on_task(
         step_limit=_STEP_LIMIT,
         cost_limit=_COST_LIMIT,
         setup_commands=setup_commands,
+        post_commands=post_commands,
         extract_paths=extract_paths,
         trajectory_path=str(trajectory_path),
     )
@@ -72,24 +74,43 @@ def _build_setup_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) ->
         "bash /src/build.sh 2>&1 | tail -20 || true",
     ]
 
-    # Apply the vulnerability patch to put the container in vulnerable state.
-    if spec.patch_diff:
-        encoded = base64.b64encode(spec.patch_diff.encode()).decode()
-        cmds.append(
-            f"echo '{encoded}' | base64 -d > /tmp/vuljector_task.patch"
-            f" && patch -p1 --fuzz=3 -d {runtime.repo_dir_in_container}"
-            f" < /tmp/vuljector_task.patch"
-            f" && echo 'Vulnerability patch applied OK'"
-            f" || echo 'WARNING: patch apply failed (proceeding anyway)'"
-        )
+    # Copy snapshot files to put the container in the vulnerable state.
+    vuln_dir = project_root(spec.project) / "vulnerabilities" / spec.vulnerability_id
+    snapshot_dir = vuln_dir / "snapshot" / "files"
+    if snapshot_dir.exists():
+        for snapshot_file in snapshot_dir.rglob("*"):
+            if not snapshot_file.is_file():
+                continue
+            rel = snapshot_file.relative_to(snapshot_dir)
+            dest = f"{runtime.repo_dir_in_container}/{rel}"
+            content_b64 = base64.b64encode(
+                snapshot_file.read_bytes()
+            ).decode()
+            cmds.append(
+                f"mkdir -p $(dirname '{dest}')"
+                f" && echo '{content_b64}' | base64 -d > '{dest}'"
+                f" && echo 'Installed vulnerable {rel} OK'"
+            )
     else:
         logger.warning(
-            "[%s] No patch_diff available for %s — agent will run on clean source.",
+            "[%s] No snapshot/files found for %s — agent will run on clean source.",
             spec.project, spec.vulnerability_id,
         )
 
-    # Install test harness (for secure_patch task so agent can verify no regressions).
+    # For secure_patch: also install the reference exploit and test harness.
     if spec.task_type == TaskType.SECURE_PATCH:
+        # Reference exploit — agent uses this to verify their fix works.
+        if spec.reference_exploit_path.exists():
+            exploit_b64 = base64.b64encode(
+                spec.reference_exploit_path.read_bytes()
+            ).decode()
+            cmds.append(
+                f"echo '{exploit_b64}' | base64 -d > /tmp/ref_attack.py"
+                " && chmod +x /tmp/ref_attack.py"
+                " && echo 'Reference exploit installed OK'"
+            )
+
+        # Test harness.
         harness_path = project_root(spec.project) / "unit_tests" / "test.sh"
         if harness_path.exists():
             harness_b64 = base64.b64encode(
@@ -102,6 +123,17 @@ def _build_setup_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) ->
             )
 
     return cmds
+
+
+def _build_post_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) -> list[str]:
+    """Build post_commands that run after the agent but before file extraction."""
+    if spec.task_type == TaskType.SECURE_PATCH:
+        # Agent edits the file directly; generate a clean git diff for validation.
+        return [
+            f"cd {runtime.repo_dir_in_container}"
+            f" && git diff HEAD > /tmp/fix.patch || true"
+        ]
+    return []
 
 
 def _build_prompt(spec: SyntheticTaskSpec) -> str:
@@ -146,6 +178,16 @@ def _save_artifact(
     out_path = artifacts_dir / spec.task_type.agent_output_filename
     out_path.write_text(content, encoding="utf-8")
     logger.info("[%s] Saved agent artifact to %s", spec.project, out_path)
+
+    # Mirror injection output format: create exploit.sh bash wrapper alongside attack.py.
+    if spec.task_type.extracts_exploit:
+        exploit_sh = (
+            "#!/bin/bash\n"
+            f"cd /src/{spec.project}\n"
+            f"python3 {container_path}\n"
+        )
+        (artifacts_dir / "exploit.sh").write_text(exploit_sh, encoding="utf-8")
+        (artifacts_dir / "exploit.sh").chmod(0o755)
 
 
 def get_artifact_path(run_dir: Path, spec: SyntheticTaskSpec) -> Path | None:

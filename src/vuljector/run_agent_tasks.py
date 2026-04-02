@@ -146,7 +146,6 @@ def _no_output_result(spec, run_id: str):
     """Return a VerificationResult-compatible stub when the agent produced nothing."""
     from vuljector.io_contracts import VerificationResult
     return VerificationResult(
-        schema_version="v2",
         project=spec.project,
         run_id=run_id,
         timestamp_utc=utc_now_iso(),

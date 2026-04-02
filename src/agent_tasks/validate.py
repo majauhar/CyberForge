@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import subprocess
 from pathlib import Path
@@ -61,7 +62,6 @@ def _validate_poc(
 
     def _make_result(status, checks, cause, msg):
         return VerificationResult(
-            schema_version="v2",
             project=spec.project,
             run_id=run_id,
             timestamp_utc=utc_now_iso(),
@@ -75,12 +75,9 @@ def _validate_poc(
     logger.info("[%s] PoC validation: resetting to secure commit %s", spec.project, spec.secure_base_commit)
     reset_to_secure_commit(runtime, repo_dir=repo_dir, secure_base_commit=spec.secure_base_commit)
 
-    # ── Apply vulnerability patch ─────────────────────────────────────────────
-    if spec.patch_diff:
-        logger.info("[%s] Applying vulnerability patch to persistent container", spec.project)
-        _apply_patch(runtime, repo_dir=repo_dir, patch_diff=spec.patch_diff)
-    else:
-        logger.warning("[%s] No patch_diff — validating against clean source (may give false results)", spec.project)
+    # ── Copy snapshot files to recreate the vulnerable state ─────────────────
+    logger.info("[%s] Installing vulnerable snapshot files", spec.project)
+    _install_snapshot_files(runtime, spec)
 
     # ── Install agent's exploit in the container ──────────────────────────────
     exploit_container_path = "/tmp/agent_attack.py"
@@ -148,7 +145,6 @@ def _validate_patch(
 
     def _make_result(status, checks, cause, msg, passed=None, test_msg="", test_out=""):
         return VerificationResult(
-            schema_version="v2",
             project=spec.project,
             run_id=run_id,
             timestamp_utc=utc_now_iso(),
@@ -165,12 +161,9 @@ def _validate_patch(
     logger.info("[%s] Patch validation: resetting to secure commit %s", spec.project, spec.secure_base_commit)
     reset_to_secure_commit(runtime, repo_dir=repo_dir, secure_base_commit=spec.secure_base_commit)
 
-    # ── Apply vulnerability patch (make it vulnerable) ────────────────────────
-    if spec.patch_diff:
-        logger.info("[%s] Applying vulnerability patch", spec.project)
-        _apply_patch(runtime, repo_dir=repo_dir, patch_diff=spec.patch_diff)
-    else:
-        logger.warning("[%s] No patch_diff available", spec.project)
+    # ── Copy snapshot files to recreate the vulnerable state ─────────────────
+    logger.info("[%s] Installing vulnerable snapshot files", spec.project)
+    _install_snapshot_files(runtime, spec)
 
     # ── Apply agent's fix patch ───────────────────────────────────────────────
     logger.info("[%s] Applying agent's fix patch from %s", spec.project, patch_host_path)
@@ -226,6 +219,26 @@ def _validate_patch(
 
 
 # ── Utility helpers ───────────────────────────────────────────────────────────
+
+def _install_snapshot_files(runtime: ContainerRuntime, spec: SyntheticTaskSpec) -> None:
+    """Copy vulnerable snapshot files into the persistent container."""
+    vuln_dir = project_root(spec.project) / "vulnerabilities" / spec.vulnerability_id
+    snapshot_dir = vuln_dir / "snapshot" / "files"
+    if not snapshot_dir.exists():
+        logger.warning("[%s] No snapshot/files found for %s — container remains at secure baseline.", spec.project, spec.vulnerability_id)
+        return
+    for snapshot_file in snapshot_dir.rglob("*"):
+        if not snapshot_file.is_file():
+            continue
+        rel = snapshot_file.relative_to(snapshot_dir)
+        dest = f"{runtime.repo_dir_in_container}/{rel}"
+        content_b64 = base64.b64encode(snapshot_file.read_bytes()).decode()
+        runtime.exec(
+            f"mkdir -p $(dirname '{dest}')"
+            f" && echo '{content_b64}' | base64 -d > '{dest}'"
+        )
+    logger.info("[%s] Snapshot files installed for %s", spec.project, spec.vulnerability_id)
+
 
 def _apply_patch(
     runtime: ContainerRuntime,
