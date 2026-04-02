@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from selector.base import SelectionRequest
 from selector.registry import get_selection_strategy
 from utils.json_io import write_json
@@ -21,6 +23,7 @@ def run_selection(
     cwe_groups: list[str] | None = None,
     cwe_ids: list[str] | None = None,
     max_candidates: int | None = None,
+    on_run_initialized: Callable[[dict], None] | None = None,
 ) -> dict:
     config = load_project_config(project)
     runtime = build_runtime(config)
@@ -40,6 +43,8 @@ def run_selection(
         "max_candidates": _max,
     }
     write_json(run_dir / "selection_request.json", request_payload)
+    if on_run_initialized is not None:
+        on_run_initialized(request_payload)
 
     strategy = get_selection_strategy(strategy_id)
     # setup() clones the repo locally if not already present — idempotent.

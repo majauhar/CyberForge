@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import shutil
 from pathlib import Path
@@ -36,6 +37,7 @@ def run_injection(
     candidates_file: str,
     num_vulnerabilities: int = 1,
     debug: bool = False,
+    on_run_initialized: Callable[[dict], None] | None = None,
 ) -> dict:
     config = load_project_config(project)
     runtime = build_runtime(config)
@@ -55,6 +57,8 @@ def run_injection(
         "debug": debug,
     }
     write_json(run_dir / "injection_request.json", request_payload)
+    if on_run_initialized is not None:
+        on_run_initialized(request_payload)
 
     candidates_payload = read_json(Path(candidates_file))
     candidates = [
