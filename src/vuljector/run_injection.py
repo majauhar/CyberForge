@@ -24,6 +24,7 @@ from vuljector.core import (
     load_project_config,
     next_vulnerability_id,
 )
+from vuljector.cve_report import generate_cve_report, write_cve_report
 from vuljector.io_contracts import SelectionCandidate, VerificationResult, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,20 @@ def run_injection(
                 )
 
                 if verification_result.status == "success":
+                    cve_json = generate_cve_report(
+                        runtime=runtime,
+                        project=project,
+                        vulnerability_id=vulnerability_id,
+                        model_id=model_id,
+                        patch_diff=(injection_result.artifacts or {}).get("patch_diff", ""),
+                        exploit_script=(injection_result.artifacts or {}).get("attack_script", ""),
+                        intended_cwe_group=injection_result.cwe_group or candidate.cwe_group,
+                        intended_cwe_id=injection_result.cwe_id or candidate.cwe_id,
+                        affected_file=candidate.repo_path,
+                        affected_function=candidate.symbol,
+                    )
+                    if cve_json:
+                        write_cve_report(vuln_dir, cve_json)
                     successes += 1
                     vulnerability_ids.append(vulnerability_id)
             else:

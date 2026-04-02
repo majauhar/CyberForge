@@ -118,6 +118,7 @@ Vuljector/src/
 │   ├── run_setup.py                # run setup as a first-class independent phase
 │   ├── run_selection.py            # require setup; run selector; persist candidates.json
 │   ├── run_injection.py            # consume candidates + injector + verifier + dataset persist; --debug route
+│   ├── cve_report.py               # generate CVE JSON 5.0 record after successful injection
 │   └── io_contracts.py             # dataclasses for request/result payloads; to_dict/from_dict
 │
 ├── selector/
@@ -174,6 +175,12 @@ Vuljector/src/
   - require setup state, run selector strategy, persist `candidates.json`.
 - `run_injection.py`:
   - consume candidates + run injector strategy + verifier + dataset persist; honors `debug` flag for artifact location (`vulnerabilities/` vs `debug/success/` or `debug/failed/`).
+- `cve_report.py`:
+  - after successful injection, runs a mini-agent task inside the project container to analyse the patch diff and exploit script.
+  - the agent selects a CWE from the approved list (`utils/cwe/cwe_categories.csv`) and writes `/tmp/cve_analysis.json`.
+  - CVSS 3.1 base score and severity are computed from the agent-provided vector using the standard formula (not LLM-generated).
+  - the CWE group is inferred by looking up the selected CWE in `cwe_categories.csv`.
+  - output is written to `vuljector-projects/<project>/vulnerabilities/vulnerability_N/cve_report.json`.
 - `io_contracts.py`:
   - dataclasses / typed loaders for request/result payloads.
 
@@ -279,6 +286,7 @@ vuljector-projects/
     ├── vulnerabilities/                # production dataset; only on success (no debug)
     │   └── vulnerability_N/
     │       ├── vulnerability_metadata.json
+    │       ├── cve_report.json             # CVE JSON 5.0 record; generated after successful injection
     │       ├── exploit_files/
     │       │   └── exploit.sh
     │       └── snapshot/
@@ -569,6 +577,56 @@ Path: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/vulnerabilit
 ```
 
 `snapshot_links` explicitly maps each saved file to its location in the original repository tree.
+
+### `cve_report.json`
+
+Path: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/cve_report.json`
+
+Generated after successful injection by `vuljector/cve_report.py`. Follows the CVE JSON 5.0 schema.
+
+```json
+{
+  "dataType": "CVE_RECORD",
+  "dataVersion": "5.0.0",
+  "cveMetadata": {
+    "cveId": "CVE-VULJECTOR-flask-vulnerability_12",
+    "state": "PUBLISHED",
+    "datePublished": "2026-01-01T00:07:00Z"
+  },
+  "containers": {
+    "cna": {
+      "providerMetadata": { "shortName": "Vuljector" },
+      "title": "<one-line title>",
+      "descriptions": [{ "lang": "en", "value": "<description>" }],
+      "affected": [{ "vendor": "open-source", "product": "flask", "versions": [...] }],
+      "problemTypes": [{ "descriptions": [{ "cweId": "CWE-N", "type": "CWE", ... }] }],
+      "metrics": [{
+        "cvssV3_1": {
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "baseScore": 9.8,
+          "baseSeverity": "CRITICAL"
+        }
+      }],
+      "x_vuljector": {
+        "vulnerability_id": "vulnerability_12",
+        "intended_cwe_group": "<group from injection candidate>",
+        "intended_cwe_id": "<CWE-N from injection candidate>",
+        "cwe_group": "<group inferred from agent-selected CWE via cwe_categories.csv>",
+        "affected_file": "<repo-relative path>",
+        "affected_function": "<function name>",
+        "impact": "...",
+        "proof_of_concept": "...",
+        "fix": "..."
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `baseScore` and `baseSeverity` are computed from `vectorString` using the CVSS 3.1 formula — not LLM-generated.
+- `x_vuljector.cwe_group` is looked up from `utils/cwe/cwe_categories.csv` using the agent's selected `cweId`.
+- `x_vuljector.intended_cwe_group` / `intended_cwe_id` preserve the original injection candidate's CWE for traceability.
 
 ## Strategy Interfaces
 

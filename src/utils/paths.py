@@ -10,6 +10,10 @@ def src_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def cwe_categories_csv() -> Path:
+    return Path(__file__).resolve().parent / "cwe" / "cwe_categories.csv"
+
+
 def workspace_root() -> Path:
     # src/ is under Vuljector/, which is sibling of vuljector-projects/.
     return src_root().parents[1]
