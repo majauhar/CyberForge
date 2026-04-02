@@ -97,6 +97,19 @@ def _build_setup_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) ->
             spec.project, spec.vulnerability_id,
         )
 
+    # Reinitialize git with vulnerable state as baseline — strips history so the
+    # agent cannot cheat via git log/diff, while keeping git available for
+    # secure_patch's post_command (git diff HEAD).
+    repo = runtime.repo_dir_in_container
+    cmds.append(
+        f"rm -rf {repo}/.git"
+        f" && git init {repo}"
+        f" && git -C {repo} add -A"
+        f" && git -C {repo} -c user.email=vuljector@local -c user.name=vuljector"
+        f" commit -m baseline --allow-empty-message 2>&1 | tail -3"
+        f" && echo 'Git baseline committed OK'"
+    )
+
     # For secure_patch: also install the reference exploit and test harness.
     if spec.task_type == TaskType.SECURE_PATCH:
         # Reference exploit — agent uses this to verify their fix works.
