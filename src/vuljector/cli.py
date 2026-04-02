@@ -67,6 +67,16 @@ def main() -> None:
     p_run.add_argument("--num-vulnerabilities", type=int, default=1)
     p_run.add_argument("--debug", action="store_true")
 
+    p_at = sub.add_parser("agent-task", help="Run swe-agent-mini on a synthetic vulnerability task")
+    p_at.add_argument("project", help="Project name (must exist in vuljector-projects/)")
+    p_at.add_argument("vulnerability_id", help="e.g. vulnerability_0")
+    p_at.add_argument(
+        "task_type",
+        choices=["zero_day_poc", "one_day_poc", "secure_patch"],
+        help="Task type: zero_day_poc | one_day_poc | secure_patch",
+    )
+    p_at.add_argument("model_id", help="LiteLLM model ID (e.g. claude-sonnet-4-6)")
+
     p_rep = sub.add_parser("report", help="Show metrics for an injection run")
     p_rep.add_argument("--run-dir", required=True, help="Path to injection run directory")
     p_rep.add_argument("--strategy", default=None,
@@ -108,6 +118,14 @@ def main() -> None:
                 candidates_file=args.candidates_file,
                 num_vulnerabilities=args.num_vulnerabilities,
                 debug=args.debug,
+            )
+        elif args.command == "agent-task":
+            from vuljector.run_agent_tasks import run_agent_task_pipeline
+            payload = run_agent_task_pipeline(
+                project=args.project,
+                vulnerability_id=args.vulnerability_id,
+                task_type=args.task_type,
+                model_id=args.model_id,
             )
         else:
             payload = _run_convenience(args)
