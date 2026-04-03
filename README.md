@@ -7,7 +7,7 @@ synthetic tasks derived from those vulnerabilities to collect trajectories for S
 
 ## What It Does
 
-Four-phase pipeline:
+Five-phase pipeline:
 
 ```
 Init             Build image, detect commit, discover test harness → portable project definition
@@ -185,7 +185,7 @@ Requires `patch.diff`, `exploit_files/`, and `snapshot/` to be present in the vu
 ## Agent Tasks (Phase 5)
 
 Once vulnerabilities are verified and stored in `vuljector-projects/<project>/vulnerabilities/`,
-Phase 4 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
+Phase 5 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
 Trajectories are saved and scored for downstream SFT filtering.
 
 ### Task Types
