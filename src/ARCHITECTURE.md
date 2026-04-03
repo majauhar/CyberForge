@@ -30,6 +30,7 @@ Ordering constraint:
 - `setup` must be run first
 - `selection` requires completed setup
 - `injection` requires completed setup and a previously generated `candidates.json`
+- `cve-report` requires a completed injection (vulnerability folder with `patch.diff`, `exploit_files/`, `snapshot/`)
 
 ### Phase 1: Setup
 
@@ -113,7 +114,7 @@ core classes (including abstract interfaces).
 Vuljector/src/
 │
 ├── vuljector/
-│   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, run
+│   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, run, cve-report
 │   ├── core.py                     # shared plumbing for config, runtime, state checks, persistence
 │   ├── run_setup.py                # run setup as a first-class independent phase
 │   ├── run_selection.py            # require setup; run selector; persist candidates.json
@@ -162,6 +163,7 @@ Vuljector/src/
     - `selection`
     - `injection` (with `--debug` flag)
     - `run` (optional convenience wrapper: runs `setup` if needed, then `selection`, then `injection`)
+    - `cve-report` (generate a CVE JSON 5.0 record for an existing vulnerability)
 - `core.py`:
   - shared plumbing used by all phase runners:
     - load `project.json`

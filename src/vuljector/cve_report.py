@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,8 +42,6 @@ def generate_cve_report(
     exploit_script: str,
     intended_cwe_group: str,
     intended_cwe_id: str,
-    affected_file: str,
-    affected_function: str,
 ) -> str:
     """Run a mini-swe-agent task in the project container to produce a CVE JSON 5.0 record.
 
@@ -56,8 +55,6 @@ def generate_cve_report(
         exploit_script=exploit_script,
         intended_cwe_group=intended_cwe_group or "unknown",
         intended_cwe_id=intended_cwe_id or "unknown",
-        affected_file=affected_file or "unknown",
-        affected_function=affected_function or "unknown",
     )
 
     agent_req = AgentRequest(
@@ -86,8 +83,6 @@ def generate_cve_report(
         vulnerability_id=vulnerability_id,
         intended_cwe_group=intended_cwe_group,
         intended_cwe_id=intended_cwe_id,
-        affected_file=affected_file,
-        affected_function=affected_function,
         analysis_raw=analysis_raw,
     )
 
@@ -97,8 +92,6 @@ def _cvss31_score(vector: str) -> tuple[float, str]:
 
     Returns (score, severity) or (0.0, "") on parse failure.
     """
-    import math
-
     AV  = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
     AC  = {"L": 0.77, "H": 0.44}
     PR_U = {"N": 0.85, "L": 0.62, "H": 0.27}   # Scope Unchanged
@@ -114,10 +107,7 @@ def _cvss31_score(vector: str) -> tuple[float, str]:
         isc_base = 1 - (1 - CIA[parts["C"]]) * (1 - CIA[parts["I"]]) * (1 - CIA[parts["A"]])
         if isc_base <= 0:
             return 0.0, "NONE"
-        if scope == "U":
-            isc = 6.42 * isc_base
-        else:
-            isc = 7.52 * (isc_base - 0.029) - 3.25 * (isc_base - 0.02) ** 15
+        isc = 6.42 * isc_base if scope == "U" else 7.52 * (isc_base - 0.029) - 3.25 * (isc_base - 0.02) ** 15
         raw = min(isc + ess, 10.0) if scope == "U" else min(1.08 * (isc + ess), 10.0)
         score = math.ceil(raw * 10) / 10
     except (KeyError, ValueError, ZeroDivisionError):
@@ -149,8 +139,6 @@ def _assemble_cve_record(
     vulnerability_id: str,
     intended_cwe_group: str,
     intended_cwe_id: str,
-    affected_file: str,
-    affected_function: str,
     analysis_raw: str,
 ) -> str:
     try:
@@ -213,8 +201,6 @@ def _assemble_cve_record(
                     "intended_cwe_group": intended_cwe_group,
                     "intended_cwe_id": intended_cwe_id,
                     "cwe_group": cwe_group,
-                    "affected_file": affected_file,
-                    "affected_function": affected_function,
                     "impact": analysis.get("impact", ""),
                     "proof_of_concept": analysis.get("proof_of_concept", ""),
                     "fix": analysis.get("fix", ""),

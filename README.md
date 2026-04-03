@@ -13,6 +13,7 @@ Init             Build image, detect commit, discover test harness → portable 
 Phase 1 — Setup      Build/cache ready container for local use
 Phase 2 — Selection  Find where to inject: static analysis or LLM repo exploration
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
+CVE Report       Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
 ```
 
 Each phase is independent and rerunnable. Phases communicate through JSON files under `runs/`.
@@ -156,6 +157,16 @@ unit tests                  →  expects baseline test count to pass
 ```
 
 Only entries that pass all three checks are persisted to the dataset.
+
+## CVE Report
+
+Generate a CVE JSON 5.0 record for any vulnerability in the dataset:
+
+```bash
+uv run vuljector cve-report flask vulnerability_8 claude-sonnet-4-6
+```
+
+Requires `patch.diff`, `exploit_files/`, and `snapshot/` to be present in the vulnerability folder (produced by injection). Writes `cve_report.json` alongside them. The CWE is validated against the approved list (`src/utils/cwe/cwe_categories.csv`) and the CVSS 3.1 score is computed deterministically from the vector.
 
 ## Metrics
 

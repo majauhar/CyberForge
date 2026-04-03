@@ -646,6 +646,9 @@ Review the code change and proof-of-concept exploit below for **{project}**, \
 then write a structured security analysis.
 
 ## Code change
+
+Lines starting with `-` are the **secure (clean) version**; lines starting with `+` are the **vulnerable (injected) version**.
+
 ```diff
 {patch_diff}
 ```
@@ -655,17 +658,11 @@ then write a structured security analysis.
 {exploit_script}
 ```
 
-**File:** `{affected_file}` | **Function:** `{affected_function}` | \
 **Suggested category:** {intended_cwe_group} ({intended_cwe_id})
 
 ---
 
-**1. Read the file for context:**
-```mswea_bash_command
-cat -n "{affected_file}" 2>/dev/null | head -200
-```
-
-**2. Write your analysis to `/tmp/cve_analysis.json`.**
+**1. Write your analysis to `/tmp/cve_analysis.json`.**
 Use the suggested CWE as a starting point. The chosen `cwe_id` must exist in `/tmp/cwe_categories.csv`:
 ```mswea_bash_command
 python3 - <<'PYEOF'
@@ -690,7 +687,7 @@ print("Written")
 PYEOF
 ```
 
-**3. Validate — confirm the chosen CWE exists in the approved list:**
+**2. Validate — confirm the chosen CWE exists in the approved list:**
 ```mswea_bash_command
 python3 - <<'PYEOF'
 import json, sys
@@ -706,9 +703,9 @@ if not found:
 print(f"OK: {{r['cwe_id']}} is valid. cvss_vector={{r['cvss_vector']}}")
 PYEOF
 ```
-If step 3 exits with an error, grep `/tmp/cwe_categories.csv` for a matching entry, update `cwe_id` in `cve_analysis.json`, and re-run step 3.
+If step 2 exits with an error, grep `/tmp/cwe_categories.csv` for a matching entry, update `cwe_id` in `cve_analysis.json`, and re-run step 2.
 
-**4. Submit:**
+**3. Submit:**
 ```mswea_bash_command
 echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 ```
