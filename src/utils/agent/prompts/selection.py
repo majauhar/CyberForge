@@ -84,6 +84,7 @@ Look for functions that:
 - Accept external/user-controlled input
 - Have a guard (if / assert / raise) **before** a dangerous call
 - Handle file paths, shell args, SQL, deserialization, auth, or template rendering
+- Live in real runtime/library code, not tests, fixtures, examples, docs, or vendored code
 
 **4. Grep for exact line numbers** of dangerous calls:
 ```bash
@@ -119,7 +120,15 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 - Every candidate MUST use real file paths, real function names, real lines you saw.
 - Find at least **{top_n}** candidates. Keep reading files if early ones look clean.
 - Prefer candidates with a clearly meaningful checkpoint guarding a genuinely dangerous op.
-- Prioritize project source over vendored code, generated code, and dependency directories.
+- Only select candidates from real application or library runtime code.
+- Reject paths under tests, specs, examples, docs, benchmarks, fixtures, mocks, generated code, vendored code, and dependency directories.
+- Treat these path fragments as out of scope unless the project's main runtime truly lives there:
+  `/test/`, `/tests/`, `/testing/`, `/spec/`, `/specs/`, `/example/`, `/examples/`, `/doc/`, `/docs/`,
+  `/bench/`, `/benchmark/`, `/fixtures/`, `/mocks/`, `/node_modules/`, `/vendor/`, `/third_party/`,
+  `/third-party/`, `/external/`, `/dist/`, `/build/`, `/coverage/`, `/site-packages/`.
+- Prefer code under `src/`, `lib/`, package directories, or the project's main runtime modules.
+- Do not use assertions in tests as security checkpoints.
+- Before writing `/tmp/candidates.json`, remove any candidate from a non-production path.
 - Do NOT combine the submit echo with any other command.
 """
 
@@ -135,14 +144,21 @@ def build_repo_explore_task(*, project: str, top_n: int, language: str) -> str:
             orient_cmd=(
                 f'find /src/{project} \\( -name "*.js" -o -name "*.cjs" -o -name "*.mjs" '
                 f'-o -name "*.ts" \\) -not -path "*/test/*" -not -path "*/tests/*" '
-                f'-not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/coverage/*" '
-                f'-not -path "*/.git/*" 2>/dev/null | sort | head -60'
+                f'-not -path "*/spec/*" -not -path "*/specs/*" -not -path "*/example/*" '
+                f'-not -path "*/examples/*" -not -path "*/doc/*" -not -path "*/docs/*" '
+                f'-not -path "*/bench/*" -not -path "*/benchmark/*" -not -path "*/fixture/*" '
+                f'-not -path "*/fixtures/*" -not -path "*/mock/*" -not -path "*/mocks/*" '
+                f'-not -path "*/node_modules/*" -not -path "*/vendor/*" -not -path "*/third_party/*" '
+                f'-not -path "*/third-party/*" -not -path "*/external/*" -not -path "*/dist/*" '
+                f'-not -path "*/build/*" -not -path "*/coverage/*" -not -path "*/.git/*" '
+                f'2>/dev/null | sort | head -60'
             ),
             search_cmd=(
                 f'grep -rln "eval\\|Function(\\|child_process\\|exec\\|spawn\\|fs\\.\\|http\\.\\|https\\.\\|'
                 f'vm\\.\\|yaml\\|parse\\|deserialize\\|innerHTML\\|setHeader\\|cookie" /src/{project} '
                 f'--include="*.js" --include="*.cjs" --include="*.mjs" --include="*.ts" 2>/dev/null | '
-                f'grep -v "node_modules" | grep -v "/test" | head -20'
+                f'grep -Ev "/(test|tests|testing|spec|specs|example|examples|doc|docs|bench|benchmark|fixture|fixtures|mock|mocks|node_modules|vendor|third_party|third-party|external|dist|build|coverage)/" | '
+                f'head -20'
             ),
             read_cmd=f'cat -n /src/{project}/<chosen_file>.js | head -220',
             detail_cmd=(
@@ -159,13 +175,21 @@ def build_repo_explore_task(*, project: str, top_n: int, language: str) -> str:
             orient_cmd=(
                 f'find /src/{project} \\( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" '
                 f'-o -name "*.h" -o -name "*.hpp" \\) -not -path "*/test/*" -not -path "*/tests/*" '
-                f'-not -path "*/.git/*" 2>/dev/null | sort | head -60'
+                f'-not -path "*/spec/*" -not -path "*/specs/*" -not -path "*/example/*" '
+                f'-not -path "*/examples/*" -not -path "*/doc/*" -not -path "*/docs/*" '
+                f'-not -path "*/bench/*" -not -path "*/benchmark/*" -not -path "*/fixture/*" '
+                f'-not -path "*/fixtures/*" -not -path "*/mock/*" -not -path "*/mocks/*" '
+                f'-not -path "*/vendor/*" -not -path "*/third_party/*" -not -path "*/third-party/*" '
+                f'-not -path "*/external/*" -not -path "*/build/*" -not -path "*/.git/*" '
+                f'2>/dev/null | sort | head -60'
             ),
             search_cmd=(
                 f'grep -rln "strcpy\\|strncpy\\|memcpy\\|memmove\\|sprintf\\|snprintf\\|system(\\|popen\\|execv\\|'
                 f'open(\\|fopen\\|read(\\|write(\\|malloc\\|calloc\\|realloc\\|free\\|assert\\|atoi\\|strtol" '
                 f'/src/{project} --include="*.c" --include="*.cc" --include="*.cpp" --include="*.cxx" '
-                f'--include="*.h" --include="*.hpp" 2>/dev/null | grep -v "/test" | head -20'
+                f'--include="*.h" --include="*.hpp" 2>/dev/null | '
+                f'grep -Ev "/(test|tests|testing|spec|specs|example|examples|doc|docs|bench|benchmark|fixture|fixtures|mock|mocks|vendor|third_party|third-party|external|build)/" | '
+                f'head -20'
             ),
             read_cmd=f'cat -n /src/{project}/<chosen_file>.c | head -220',
             detail_cmd=(
@@ -180,12 +204,20 @@ def build_repo_explore_task(*, project: str, top_n: int, language: str) -> str:
         top_n=top_n,
         language_label="Python",
         orient_cmd=(
-            f'find /src/{project} -name "*.py" -not -path "*/test*" -not -path "*/__pycache__/*" '
+            f'find /src/{project} -name "*.py" -not -path "*/test*" -not -path "*/spec*" '
+            f'-not -path "*/example/*" -not -path "*/examples/*" -not -path "*/doc/*" '
+            f'-not -path "*/docs/*" -not -path "*/bench/*" -not -path "*/benchmark/*" '
+            f'-not -path "*/fixture/*" -not -path "*/fixtures/*" -not -path "*/mock/*" '
+            f'-not -path "*/mocks/*" -not -path "*/vendor/*" -not -path "*/third_party/*" '
+            f'-not -path "*/third-party/*" -not -path "*/external/*" -not -path "*/site-packages/*" '
+            f'-not -path "*/build/*" -not -path "*/dist/*" -not -path "*/__pycache__/*" '
             f'-not -path "*/.git/*" 2>/dev/null | sort | head -60'
         ),
         search_cmd=(
             f'grep -rln "eval\\|exec\\|subprocess\\|pickle\\|yaml.load\\|open(\\|os.path\\|.query\\|render\\|getattr" '
-            f'/src/{project} --include="*.py" 2>/dev/null | grep -v "test" | head -20'
+            f'/src/{project} --include="*.py" 2>/dev/null | '
+            f'grep -Ev "/(test|tests|testing|spec|specs|example|examples|doc|docs|bench|benchmark|fixture|fixtures|mock|mocks|vendor|third_party|third-party|external|site-packages|build|dist)/" | '
+            f'head -20'
         ),
         read_cmd=f'cat -n /src/{project}/<chosen_file>.py | head -200',
         detail_cmd=(
