@@ -212,6 +212,9 @@ def run_injection(
                 )
 
                 if verification_result.status == "success":
+                    patch_diff = (injection_result.artifacts or {}).get("patch_diff", "")
+                    if patch_diff:
+                        (vuln_dir / "patch.diff").write_text(patch_diff, encoding="utf-8")
                     successes += 1
                     vulnerability_ids.append(vulnerability_id)
             else:

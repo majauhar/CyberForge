@@ -14,7 +14,8 @@ Init             Build image, detect commit, discover test harness → portable 
 Phase 1 — Setup      Build/cache ready container for local use
 Phase 2 — Selection  Find where to inject: static analysis, CodeQL, or LLM exploration
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
-Phase 4 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
+Phase 4 — CVE Report  Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
+Phase 5 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
 ```
 
 Each phase is independent and rerunnable. Phases communicate through JSON files under `runs/`.
@@ -171,7 +172,17 @@ unit tests                  →  expects baseline test count to pass
 
 Only entries that pass all three checks are persisted to the dataset.
 
-## Agent Tasks (Phase 4)
+## CVE Report (Phase 4)
+
+Generate a CVE JSON 5.0 record for any vulnerability in the dataset:
+
+```bash
+uv run vuljector cve-report flask vulnerability_8 claude-sonnet-4-6
+```
+
+Requires `patch.diff`, `exploit_files/`, and `snapshot/` to be present in the vulnerability folder (produced by injection). Writes `cve_report.json` alongside them. The CWE is validated against the approved list (`src/utils/cwe/cwe_categories.csv`) and the CVSS 3.1 score is computed deterministically from the vector.
+
+## Agent Tasks (Phase 5)
 
 Once vulnerabilities are verified and stored in `vuljector-projects/<project>/vulnerabilities/`,
 Phase 4 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
@@ -221,6 +232,7 @@ runs/agent_tasks/<project>/<task_type>/<run_id>/
 | `drop` | Any other | Discard |
 
 The raw `trajectory.json` messages field contains the full agent conversation for SFT formatting.
+
 
 ## Metrics
 

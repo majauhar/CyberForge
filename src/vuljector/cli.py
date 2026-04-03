@@ -9,6 +9,7 @@ import sys
 from utils.paths import selection_run_dir
 from vuljector.core import build_runtime, load_project_config
 from vuljector.run_init import run_init
+from vuljector.run_cve_report import run_cve_report
 from vuljector.run_injection import run_injection
 from vuljector.run_selection import run_selection
 from vuljector.run_setup import run_setup
@@ -67,6 +68,11 @@ def main() -> None:
     p_run.add_argument("--num-vulnerabilities", type=int, default=1)
     p_run.add_argument("--debug", action="store_true")
 
+    p_cve = sub.add_parser("cve-report", help="Generate CVE report for an existing vulnerability")
+    p_cve.add_argument("project")
+    p_cve.add_argument("vulnerability_id", help="e.g. vulnerability_5")
+    p_cve.add_argument("model_id")
+    
     p_at = sub.add_parser("agent-task", help="Run swe-agent-mini on a synthetic vulnerability task")
     p_at.add_argument("project", help="Project name (must exist in vuljector-projects/)")
     p_at.add_argument("vulnerability_id", help="e.g. vulnerability_0")
@@ -83,6 +89,19 @@ def main() -> None:
                        help="Filter by selection strategy (e.g. static_analysis, llm_explore). Default: all.")
 
     args = parser.parse_args()
+
+    if args.command == "cve-report":
+        try:
+            payload = run_cve_report(
+                project=args.project,
+                vulnerability_id=args.vulnerability_id,
+                model_id=args.model_id,
+            )
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(payload, indent=2))
+        return
 
     if args.command == "report":
         from pathlib import Path
