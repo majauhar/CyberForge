@@ -63,3 +63,7 @@ def selection_run_dir(project: str, run_id: str) -> Path:
 def injection_run_dir(project: str, run_id: str) -> Path:
     return runs_root() / "injection" / project / run_id
 
+
+def agent_task_run_dir(project: str, task_type: str, run_id: str) -> Path:
+    return runs_root() / "agent_tasks" / project / task_type / run_id
+

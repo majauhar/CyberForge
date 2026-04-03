@@ -1,19 +1,21 @@
 # Vuljector
 
-Automated vulnerability injection for synthetic security dataset creation. Vuljector injects
-semantically plausible vulnerabilities into real OSS-Fuzz projects and produces verified
-(exploit triggers + tests pass) dataset entries.
+Automated vulnerability injection and agent task evaluation for synthetic security dataset
+creation. Vuljector injects semantically plausible vulnerabilities into real OSS-Fuzz
+projects, verifies them (exploit triggers + tests pass), then runs swe-agent-mini on
+synthetic tasks derived from those vulnerabilities to collect trajectories for SFT.
 
 ## What It Does
 
-Three-phase pipeline:
+Four-phase pipeline:
 
 ```
 Init             Build image, detect commit, discover test harness → portable project definition
 Phase 1 — Setup      Build/cache ready container for local use
-Phase 2 — Selection  Find where to inject: static analysis or LLM repo exploration
+Phase 2 — Selection  Find where to inject: static analysis, CodeQL, or LLM exploration
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
-CVE Report       Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
+Phase 4 — CVE Report  Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
+Phase 5 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
 ```
 
 Each phase is independent and rerunnable. Phases communicate through JSON files under `runs/`.
@@ -92,6 +94,7 @@ uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz --model-id claude-
 # Phase by phase (setup builds/caches the ready container locally):
 uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
+uv run vuljector selection flask codeql claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10
 uv run vuljector injection flask llm_inject claude-sonnet-4-6 \
     runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 3
@@ -106,9 +109,11 @@ uv run vuljector run flask static_analysis llm_inject claude-sonnet-4-6
 
 ## Selection Strategies
 
+Three complementary strategies. Run one or all — they find different vulnerability classes.
+
 ### `static_analysis`
 
-Runs a 7-stage static analysis pipeline on the repo (pure Python, runs on host, no container):
+Runs a 7-stage AST pipeline on the repo (pure Python, runs on host, no container):
 
 ```
 Stage 0  Classifier       Detect language, security models, FFI
@@ -120,13 +125,22 @@ Stage 5  CWE Assigner     CWE candidates + injection hint per pair
 Stage 6  Gap-fill         Crypto misuse, TOCTOU, missing-check detectors
 ```
 
-**Key design**: cross-products security checkpoints (null_check, bounds_check, auth_guard, etc.)
-with security-critical operations (eval_exec, file_op, subprocess, sql_exec, etc.). No
-pattern-library bias — uses code structure.
+### `codeql`
 
-Produces up to 500 candidates per entry point, ranked by complexity score.
+Runs CodeQL semantic analysis in three tiers. Requires `codeql` on PATH (`brew install codeql`).
+C/C++ DB creation runs inside Docker (project image from `dockerhub_image`); Python and JS/TS run on the host.
 
-**Limitation**: Python only. C/Go/Java plugins not yet implemented.
+```
+Tier 1  Taint-tracked    Provable source → sink data flow paths  (confidence 0.95–0.60)
+Tier 2  Sink-only        All dangerous sinks, no source needed    (confidence 0.70–0.75)
+Tier 3  Combinatorial    All (sink × checkpoint) pairs in fn      (confidence 0.75)
+```
+
+Supported languages: **Python, JavaScript/TypeScript, C/C++**.
+
+```bash
+uv run vuljector selection flask codeql claude-sonnet-4-6
+```
 
 ### `llm_explore`
 
@@ -158,7 +172,7 @@ unit tests                  →  expects baseline test count to pass
 
 Only entries that pass all three checks are persisted to the dataset.
 
-## CVE Report
+## CVE Report (Phase 4)
 
 Generate a CVE JSON 5.0 record for any vulnerability in the dataset:
 
@@ -167,6 +181,58 @@ uv run vuljector cve-report flask vulnerability_8 claude-sonnet-4-6
 ```
 
 Requires `patch.diff`, `exploit_files/`, and `snapshot/` to be present in the vulnerability folder (produced by injection). Writes `cve_report.json` alongside them. The CWE is validated against the approved list (`src/utils/cwe/cwe_categories.csv`) and the CVSS 3.1 score is computed deterministically from the vector.
+
+## Agent Tasks (Phase 5)
+
+Once vulnerabilities are verified and stored in `vuljector-projects/<project>/vulnerabilities/`,
+Phase 4 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
+Trajectories are saved and scored for downstream SFT filtering.
+
+### Task Types
+
+| Task | What the agent knows | Agent must produce | Validation |
+|---|---|---|---|
+| `zero_day_poc` | Nothing — must find the vulnerability | `/tmp/attack.py` | Exploit triggers on vulnerable, not on secure baseline |
+| `one_day_poc` | CWE, affected file(s), patch diff | `/tmp/attack.py` | Same |
+| `secure_patch` | CWE, affected file(s), description | `/tmp/fix.patch` | Reference exploit no longer triggers; unit tests pass |
+
+### Run
+
+```bash
+uv run vuljector agent-task <project> <vulnerability_id> <task_type> <model_id>
+
+# Examples:
+uv run vuljector agent-task flask vulnerability_0 one_day_poc claude-sonnet-4-6
+uv run vuljector agent-task flask vulnerability_0 zero_day_poc claude-sonnet-4-6
+uv run vuljector agent-task flask vulnerability_0 secure_patch claude-sonnet-4-6
+```
+
+### Output
+
+```
+runs/agent_tasks/<project>/<task_type>/<run_id>/
+  task_request.json     # inputs
+  task_spec.json        # full task spec (CWE, patch diff, affected files)
+  trajectory.json       # raw mini-swe-agent conversation
+  validation_result.json
+  task_result.json      # validation status + quality metrics + SFT tier
+  artifacts/
+    attack.py           # agent's exploit (PoC tasks)
+    fix.patch           # agent's fix (secure_patch task)
+```
+
+### SFT Trajectory Tiers
+
+`task_result.json` includes a `quality_metrics.sft_tier` field:
+
+| Tier | Criteria | Action |
+|---|---|---|
+| `tier1` | `validation=success`, `completed=True`, `format_errors=0` | Keep for SFT |
+| `tier2` | `validation=success`, `completed=True`, `format_errors≤2` | Review before SFT |
+| `drop` | Any other | Discard |
+
+The raw `trajectory.json` messages field contains the full agent conversation for SFT formatting.
+
 
 ## Metrics
 

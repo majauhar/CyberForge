@@ -24,8 +24,9 @@ def load_project_config(project: str) -> ProjectConfig:
         target_dir=target_dir,
         secure_base_commit=str(payload.get("secure_base_commit", "")),
         main_repo_url=main_repo_url,
-        dockerhub_image=str(payload.get("dockerhub_image", "")),
+        dockerhub_image=payload.get("dockerhub_image") or None,
         unit_tests=payload.get("unit_tests"),
+        language=payload.get("language") or None,
     )
 
 
@@ -45,8 +46,8 @@ def validate_project_config(config: ProjectConfig) -> None:
         problems.append("target_dir must be a non-empty string")
     if not isinstance(config.main_repo_url, str) or not config.main_repo_url.strip():
         problems.append("main_repo_url must be a non-empty string")
-    if not isinstance(config.dockerhub_image, str):
-        problems.append("dockerhub_image must be a string")
+    if config.dockerhub_image is not None and not isinstance(config.dockerhub_image, str):
+        problems.append("dockerhub_image must be a string or None")
     if not isinstance(config.secure_base_commit, str):
         problems.append("secure_base_commit must be a string (may be empty pre-setup)")
     if config.unit_tests is not None and not isinstance(config.unit_tests, dict):
@@ -69,6 +70,7 @@ def build_runtime(config: ProjectConfig) -> ContainerRuntime:
         workspace_dir=workspace_for_project(config.project),
         main_repo_url=config.main_repo_url,
         dockerhub_image=config.dockerhub_image,
+        language=config.language,
     )
 
 

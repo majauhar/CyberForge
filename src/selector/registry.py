@@ -1,12 +1,14 @@
 """Maps selection_strategy_id -> SelectionStrategy implementation."""
 
 from selector.base import SelectionStrategy
+from selector.codeql.run import CodeQLStrategy
 from selector.llm_explore.run import LLMExploreStrategy
 from selector.static_analysis.run import StaticAnalysisStrategy
 
 SELECTOR_REGISTRY: dict[str, type[SelectionStrategy]] = {
     "llm_explore": LLMExploreStrategy,
     "static_analysis": StaticAnalysisStrategy,
+    "codeql": CodeQLStrategy,
 }
 
 

@@ -17,8 +17,10 @@ class ProjectConfig:
     target_dir: str
     secure_base_commit: str
     main_repo_url: str
-    dockerhub_image: str = ""
+    dockerhub_image: str | None = None
     unit_tests: dict[str, Any] | None = None
+    # Explicit language override for CodeQL analysis (e.g. "cpp", "python", "javascript").
+    language: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
