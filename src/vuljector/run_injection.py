@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 import shutil
+import time
 from pathlib import Path
 
 from injector.base import InjectionRequest
@@ -81,15 +82,20 @@ def run_injection(
             " && chmod +x /workspace/run/unit_tests/test.sh /workspace/run/unit_tests/parse_results.py"
         )
 
-    # pip install the project source so exploits/unit tests can import it.
-    # We skip the full build.sh (which compiles C fuzz targets and is slow);
-    # a simple pip install is enough to make `import <project>` work.
-    logger.info("[%s] pip installing project source in persistent container ...", project)
-    install_result = runtime.exec(
-        f"pip install -e {runtime.repo_dir_in_container} -q 2>&1 || true",
-    )
-    logger.info("[%s] pip install exit=%d output:\n%s", project, install_result.returncode,
-                (install_result.stdout or install_result.stderr or "").strip()[-500:])
+    # Editable installs only make sense for Python projects where verification-time
+    # tests or exploits may import the package from the repo checkout.
+    if _needs_editable_install(runtime):
+        logger.info("[%s] pip installing project source in persistent container ...", project)
+        started_at = time.monotonic()
+        install_result = runtime.exec(
+            f"pip install -e {runtime.repo_dir_in_container} -q 2>&1 || true",
+        )
+        duration_s = time.monotonic() - started_at
+        logger.info("[%s] pip install finished in %.2fs (rc=%d) output:\n%s", project, duration_s,
+                    install_result.returncode,
+                    (install_result.stdout or install_result.stderr or "").strip()[-500:])
+    else:
+        logger.info("[%s] skipping pip install for non-Python project", project)
     try:
         strategy = get_injection_strategy(strategy_id)
         if not runtime.is_strategy_setup_done(phase="injection", strategy_id=strategy.id):
@@ -291,6 +297,11 @@ def _selection_run_id_from_candidates(path: str) -> str:
     if len(p.parts) >= 2:
         return p.parent.name
     return ""
+
+
+def _needs_editable_install(runtime) -> bool:
+    language = (getattr(runtime, "language", None) or "").strip().lower()
+    return language in {"python", "python3"}
 
 
 def _dataset_vuln_dir(project: str, verification_status: str, debug: bool) -> tuple[Path, str]:

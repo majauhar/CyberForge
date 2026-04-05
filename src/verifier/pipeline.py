@@ -63,9 +63,17 @@ def run_verification(
 
     # ── Check 1: exploit must trigger on vulnerable code ─────────────────────
     logger.info("[%s] --- exploit on VULNERABLE version ---", project)
-    vuln_ok, vuln_msg = run_exploit(
+    vuln_ok, vuln_msg, vuln_timed_out = run_exploit(
         runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="vulnerable"
     )
+    if vuln_timed_out:
+        logger.info("[%s] === VERIFICATION FAIL: exploit timed out on vulnerable ===", project)
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "timed_out", "exploit_on_secure": "skipped"},
+            "exploit_timed_out_on_vulnerable",
+            vuln_msg,
+        )
     logger.info("[%s] exploit_on_vulnerable: triggered=%s", project, vuln_ok)
     if not vuln_ok:
         logger.info("[%s] === VERIFICATION FAIL: exploit did not trigger on vulnerable ===", project)
@@ -86,9 +94,20 @@ def run_verification(
 
     # ── Check 2: exploit must NOT trigger on secure code ─────────────────────
     logger.info("[%s] --- exploit on SECURE version ---", project)
-    secure_ok, secure_msg = run_exploit(
+    secure_ok, secure_msg, secure_timed_out = run_exploit(
         runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="secure"
     )
+    if secure_timed_out:
+        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
+            "restore vulnerable patch failed"
+        )
+        logger.info("[%s] === VERIFICATION FAIL: exploit timed out on secure ===", project)
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "passed", "exploit_on_secure": "timed_out"},
+            "exploit_timed_out_on_secure",
+            secure_msg,
+        )
     logger.info("[%s] exploit_on_secure: triggered=%s", project, secure_ok)
 
     # Re-apply the vulnerability for snapshot generation.
