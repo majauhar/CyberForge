@@ -16,7 +16,7 @@ from selector.base import SelectionStrategy
 from setup.container_runtime import ContainerRuntime
 from vuljector.io_contracts import SelectionCandidate, SelectionResult, utc_now_iso
 from utils.agent import AgentRequest, run_agent_task
-from utils.agent.prompts import REPO_EXPLORE_TASK, SECURITY_SYSTEM_TEMPLATE
+from utils.agent.prompts import build_repo_explore_task, SECURITY_SYSTEM_TEMPLATE
 from utils.paths import selection_run_dir
 
 
@@ -45,13 +45,14 @@ class LLMExploreStrategy(SelectionStrategy):
         top_n = getattr(request, "max_candidates", 10) or 10
         model_id = getattr(request, "model_id", "openai/gpt-4o")
         project = request.project
+        language = _selection_language(runtime)
 
         run_dir = selection_run_dir(request.project, request.run_id)
         traj_path = str(run_dir / "logs" / "llm_explore_trajectory.json")
 
         agent_req = AgentRequest(
             model_id=model_id,
-            prompt=REPO_EXPLORE_TASK.format(project=project, top_n=top_n),
+            prompt=build_repo_explore_task(project=project, top_n=top_n, language=language),
             workdir=runtime.repo_dir_in_container,
             system_template=SECURITY_SYSTEM_TEMPLATE,
             step_limit=40,
@@ -73,7 +74,9 @@ class LLMExploreStrategy(SelectionStrategy):
             selection_strategy_id=self.id,
             candidates=candidates,
         )
-
+def _selection_language(runtime: ContainerRuntime) -> str:
+    language = (getattr(runtime, "language", None) or "").strip().lower()
+    return language or "python"
 
 
 def _parse_candidates(project: str, raw_json: str, top_n: int) -> list[SelectionCandidate]:

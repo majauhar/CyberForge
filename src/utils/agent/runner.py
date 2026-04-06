@@ -71,10 +71,13 @@ def run_agent_task(
             cost_tracking="ignore_errors",
             format_error_template=(
                 "Tool call error:\n<error>\n{{error}}\n</error>\n\n"
-                "Every response MUST use the bash tool at least once.\n"
-                "Call it with: {\"command\": \"your_command_here\"}\n"
-                "To finish, run exactly: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n"
-                "(do not combine it with any other command)"
+                "Your next response must include at least one bash tool call.\n"
+                "Call the bash tool with JSON arguments of the form:\n"
+                "{\"command\": \"your_command_here\"}\n"
+                "Do not answer with a fenced bash block unless it is paired with a bash tool call.\n"
+                "To finish, use a bash tool call with exactly:\n"
+                "{\"command\": \"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\"}\n"
+                "Do not combine that final echo with any other command."
             ),
             observation_template=(
                 "{%- if output.output | length < 10000 -%}"

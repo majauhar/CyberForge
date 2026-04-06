@@ -17,6 +17,7 @@
 runs/
 scripts/eval_vuljector/evals/
 scripts/eval_vuljector/figures/
+scripts/eval_vuljector/selection_evals/
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
