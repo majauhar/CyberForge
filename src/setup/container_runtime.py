@@ -16,6 +16,7 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
     def raise_for_status(self, message: str) -> "ExecResult":
         if self.returncode != 0:
@@ -74,6 +75,17 @@ class ContainerRuntime:
     def active_image_tag(self) -> str:
         """Ready image if available, otherwise the base project image."""
         return self.ready_image_tag if self.has_ready_image() else self.image_tag
+
+    def pre_agent_setup_commands(self, build_cmd: str) -> list[str]:
+        """
+        Return per-agent setup commands.
+
+        If a ready image is available, it already has build artifacts baked in
+        from setup, so there is no need to rerun build.sh before every agent
+        task. Fall back to the provided build command only when the runtime is
+        using the base image.
+        """
+        return [] if self.has_ready_image() else [build_cmd]
 
     def build_ready_image(self) -> None:
         """
@@ -247,6 +259,7 @@ class ContainerRuntime:
         *,
         workdir: str | None = None,
         env: dict[str, str] | None = None,
+        timeout: int | float | None = None,
     ) -> ExecResult:
         shell = cmd if workdir is None else f"cd {workdir} && {cmd}"
         args = ["docker", "exec"]
@@ -254,8 +267,15 @@ class ContainerRuntime:
             for key, value in env.items():
                 args.extend(["-e", f"{key}={value}"])
         args.extend([self.container_name, "bash", "-lc", shell])
-        result = subprocess.run(args, capture_output=True, text=True)
-        return ExecResult(result.returncode, result.stdout, result.stderr)
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+            return ExecResult(result.returncode, result.stdout, result.stderr)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            timeout_msg = f"command timed out after {timeout}s"
+            stderr = f"{stderr}\n{timeout_msg}".strip()
+            return ExecResult(124, stdout, stderr, timed_out=True)
 
     def copy_from(self, container_path: str, host_path: Path) -> None:
         host_path.parent.mkdir(parents=True, exist_ok=True)

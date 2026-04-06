@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 
 from setup.container_runtime import ContainerRuntime
@@ -59,9 +60,19 @@ def run_agent_task(
                      " (ready image)" if active_image != runtime.image_tag else "")
 
         # ── Pre-agent setup commands (e.g. build.sh) ─────────────────────────
+        if not request.setup_commands:
+            logging.info("[%s] No pre-agent setup commands", runtime.project)
         for cmd in request.setup_commands:
+            started_at = time.monotonic()
             logging.info("[%s] Setup: %s", runtime.project, cmd[:80])
-            docker_env.execute({"command": cmd}, timeout=300)
+            out = docker_env.execute({"command": cmd}, timeout=300)
+            duration_s = time.monotonic() - started_at
+            logging.info(
+                "[%s] Setup finished in %.2fs (rc=%s)",
+                runtime.project,
+                duration_s,
+                out.get("returncode"),
+            )
 
         # ── Model + agent ─────────────────────────────────────────────────────
         model_name = _normalize_litellm_model_name(request.model_id)

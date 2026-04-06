@@ -57,7 +57,7 @@ class LLMExploreStrategy(SelectionStrategy):
             system_template=SECURITY_SYSTEM_TEMPLATE,
             step_limit=40,
             cost_limit=2.0,
-            setup_commands=["bash /src/build.sh 2>&1 | tail -20 || true"],
+            setup_commands=runtime.pre_agent_setup_commands("bash /src/build.sh 2>&1 | tail -20 || true"),
             extract_paths=["/tmp/candidates.json"],
             trajectory_path=traj_path,
         )
