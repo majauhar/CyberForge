@@ -394,6 +394,7 @@ Path: `vuljector-projects/<project>/project.json`
 ```json
 {
   "project": "flask",
+  "language": "python",
   "main_repo_url": "https://github.com/pallets/flask",
   "target_dir": "flask",
   "secure_base_commit": "<sha>",
@@ -407,6 +408,7 @@ Path: `vuljector-projects/<project>/project.json`
 Notes:
 
 - `main_repo_url` comes from OSS-Fuzz `project.yaml` (`main_repo`) at `init` time.
+- `language` comes from `scripts/oss_fuzz_full.csv` at `init` time and captures the primary language used for project-aware analysis.
 - `target_dir` is the source location relative to `/src` inside the built image (for example `flask` or `project-parent/tika`).
 - `unit_tests` is optional. If present and `enabled=true`, verifier runs `unit_tests/test.sh`.
 - `expected_passing_count` is written during setup when the test script is first run; verification passes if the same count passes after injection.
