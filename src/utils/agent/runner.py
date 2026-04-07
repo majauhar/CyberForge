@@ -29,6 +29,14 @@ def run_agent_task(
     # Apply collected env to host process so litellm can see Azure/API keys.
     os.environ.update(env)
     os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
+    # PYTHONHTTPSVERIFY=0 is set for self-signed cert endpoints (e.g. RCHAT OSS).
+    # httpx ignores that env var at runtime, so disable SSL verify via litellm directly.
+    if env.get("PYTHONHTTPSVERIFY") == "0":
+        try:
+            import litellm as _litellm
+            _litellm.ssl_verify = False
+        except Exception:
+            pass
     # Suppress minisweagent's startup banner which prints to stdout and corrupts
     # JSON output when the CLI result is captured via pipe/tee.
     os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
@@ -76,9 +84,14 @@ def run_agent_task(
 
         # ── Model + agent ─────────────────────────────────────────────────────
         model_name = _normalize_litellm_model_name(request.model_id)
+        model_kwargs: dict = {"drop_params": True}
+        # Force tool use for custom/self-signed endpoints (e.g. vLLM-served models)
+        # that don't default to tool calls without explicit tool_choice.
+        if env.get("PYTHONHTTPSVERIFY") == "0":
+            model_kwargs["tool_choice"] = "required"
         lm = LitellmModel(
             model_name=model_name,
-            model_kwargs={"drop_params": True},
+            model_kwargs=model_kwargs,
             cost_tracking="ignore_errors",
             format_error_template=(
                 "Tool call error:\n<error>\n{{error}}\n</error>\n\n"
