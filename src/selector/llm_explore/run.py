@@ -15,6 +15,7 @@ import csv
 import dataclasses
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -61,6 +62,10 @@ class LLMExploreStrategy(SelectionStrategy):
 
     def run(self, runtime: ContainerRuntime, request: Any) -> SelectionResult:
         top_n = getattr(request, "max_candidates", 10) or 10
+        planning_pool = max(
+            _MIN_PER_SPECIALIST * len(SPECIALIST_ROLES),
+            math.ceil(top_n * 1.25),
+        )
         model_id = getattr(request, "model_id", "openai/gpt-4o")
         project = request.project
         language = _selection_language(runtime)
@@ -69,8 +74,21 @@ class LLMExploreStrategy(SelectionStrategy):
         runtime_files, readme = _discover_project(runtime, project, language)
         logging.info("[%s] llm_explore: %d in-scope files", project, len(runtime_files))
 
-        allocation = _plan_budget(model_id, project, language, runtime_files, readme)
-        logging.info("[%s] llm_explore: allocation %s", project, allocation)
+        allocation = _plan_budget(
+            model_id,
+            project,
+            language,
+            runtime_files,
+            readme,
+            total_pool=planning_pool,
+        )
+        logging.info(
+            "[%s] llm_explore: allocation %s (requested=%d, planning_pool=%d)",
+            project,
+            allocation,
+            top_n,
+            planning_pool,
+        )
 
         codebase_tree = build_codebase_snapshot(str(project_root(project)))
         all_candidates: list[SelectionCandidate] = []
@@ -140,9 +158,9 @@ def _plan_budget(
     language: str,
     runtime_files: list[str],
     readme: str,
+    *,
+    total_pool: int,
 ) -> dict[str, int]:
-    total_pool = _SPECIALIST_POOL_SIZE * len(SPECIALIST_ROLES)
-
     file_sample = "\n".join(runtime_files[:60])
     if len(runtime_files) > 60:
         file_sample += f"\n... and {len(runtime_files) - 60} more"
@@ -304,9 +322,10 @@ def _parse_candidates(
 
 
 def _merge_candidates(all_candidates: list[SelectionCandidate], top_n: int) -> list[SelectionCandidate]:
-    best: dict[tuple[str, str], SelectionCandidate] = {}
+    best: dict[tuple[str, str, int | None], SelectionCandidate] = {}
     for c in all_candidates:
-        key = (c.repo_path, c.symbol)
+        line_start = c.line_range[0] if c.line_range else None
+        key = (c.repo_path, c.symbol, line_start)
         if key not in best or c.confidence > best[key].confidence:
             best[key] = c
 

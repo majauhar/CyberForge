@@ -311,7 +311,6 @@ You are working in the project workspace for **{project}**.
 The source checkout is available under `/src/{project}`.
 
 ## Your Role: {role_label} Specialist
-
 You are a specialist focused **exclusively** on **{role_label}** vulnerabilities.
 
 **CWE groups in scope:** {cwe_groups_str}
@@ -322,7 +321,7 @@ You are a specialist focused **exclusively** on **{role_label}** vulnerabilities
 Do NOT report candidates outside your specialty — another agent covers those.
 
 ## Goal
-Identify up to **{top_n} vulnerability injection candidates** within your specialty:
+Identify **at least {min_target} and up to {top_n} vulnerability injection candidates** within your specialty:
 locations where removing or weakening a security checkpoint would let a sensitive
 operation execute unsafely.  Target language: **{language_label}**.
 
@@ -382,20 +381,32 @@ regex_exec, env_write, priv_op, socket_op, reflection_op
 
 ## Exploration steps
 
-**1. Read your CWE reference** — do this first:
+**1. Create `/tmp/candidates.json` immediately (checkpoint file):**
+```bash
+cat > /tmp/candidates.json << 'JSONEOF'
+{{
+  "repo": "/src/{project}",
+  "role": "{role_name}",
+  "exploration_notes": "initial checkpoint",
+  "candidates": []
+}}
+JSONEOF
+```
+
+**2. Read your CWE reference** — do this next:
 ```bash
 cat /tmp/cwe_reference.json
 ```
 Lists every CWE ID in scope for your specialty with its description.
 Use **only** these IDs in `cwe_candidates`. Do not invent CWE IDs.
 
-**2. Find files relevant to your specialty** from the in-scope list above:
+**3. Find files relevant to your specialty** from the in-scope list above:
 
 ```bash
 {search_cmd}
 ```
 
-**3. Read and analyse promising files** — repeat for as many files as needed:
+**4. Read and analyse promising files** — repeat for as many files as needed:
 ```bash
 {read_cmd}
 ```
@@ -405,29 +416,24 @@ Look for functions that:
 - Have a guard (`if` / `assert` / `raise`) **before** a dangerous call in your specialty
 - Are real runtime or library code (not tests, fixtures, or examples)
 
-**4. Grep for exact line numbers** of dangerous calls:
+**5. Grep for exact line numbers** of dangerous calls:
 ```bash
 {detail_cmd}
 ```
 
-**5. Write `/tmp/candidates.json`** — write early, then extend after each batch:
-```bash
-cat > /tmp/candidates.json << 'JSONEOF'
-{{
-  "repo": "/src/{project}",
-  "role": "{role_name}",
-  "exploration_notes": "TODO",
-  "candidates": []
-}}
-JSONEOF
-```
+**6. Update `/tmp/candidates.json` continuously:**
+- As soon as you have the first valid candidate, immediately write a non-empty `/tmp/candidates.json`.
+- After every **2-3 additional validated candidates**, rewrite `/tmp/candidates.json`.
+- Do not keep candidate lists only in memory.
+- Ensure `exploration_notes` reflects what you actually inspected.
 
-**6. Verify:**
+**7. Verify before submit:**
 ```bash
 jq '.candidates | length' /tmp/candidates.json
+jq empty /tmp/candidates.json
 ```
 
-**7. Submit:**
+**8. Submit:**
 ```bash
 echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 ```
@@ -440,8 +446,11 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 - `cwe_candidates` MUST only contain IDs from `/tmp/cwe_reference.json`.
 - Only report candidates that genuinely fit your specialty CWE groups.
 - Prefer breadth: cover as many different files and functions as possible. Avoid near-overlapping ranges from the same function.
-- Write a partial list early rather than timing out with nothing.
-- If progress stalls, write what you have and submit.
+- Perform no more than 8 file reads before your first non-empty `/tmp/candidates.json` update.
+- Aim to reach at least **{min_target}** candidates before submitting; keep searching additional files if below target.
+- If you cannot reach **{min_target}** after thorough exploration, submit the best valid set you found.
+- If a command fails (for example regex/grep syntax), fix the command and continue; do not submit immediately after failed commands.
+- Never exit without a valid `/tmp/candidates.json` file, even if it is partial.
 - Do NOT combine the submit echo with any other command.
 """
 
@@ -522,6 +531,7 @@ def build_specialist_explore_task(
     role_label: str = role["label"]
     cwe_groups: list[str] = role["cwe_groups"]
     focus: str = role["focus"]
+    min_target = max(5, min(pool_size, 15))
 
     if lang in {"javascript", "js", "node", "nodejs", "typescript", "ts"}:
         language_label = "JavaScript / TypeScript"
@@ -580,6 +590,7 @@ def build_specialist_explore_task(
         cwe_groups_str=", ".join(cwe_groups),
         focus=focus,
         top_n=pool_size,
+        min_target=min_target,
         language_label=language_label,
         codebase_tree_block=codebase_tree_block,
         runtime_files_block=runtime_files_block,
