@@ -311,6 +311,7 @@ You are working in the project workspace for **{project}**.
 The source checkout is available under `/src/{project}`.
 
 ## Your Role: {role_label} Specialist
+
 You are a specialist focused **exclusively** on **{role_label}** vulnerabilities.
 
 **CWE groups in scope:** {cwe_groups_str}
@@ -321,14 +322,12 @@ You are a specialist focused **exclusively** on **{role_label}** vulnerabilities
 Do NOT report candidates outside your specialty — another agent covers those.
 
 ## Goal
-Identify **at least {min_target} and up to {top_n} vulnerability injection candidates** within your specialty:
-locations where removing or weakening a security checkpoint would let a sensitive
-operation execute unsafely.  Target language: **{language_label}**.
+Find as many **{role_label}** vulnerability injection candidates as you can — target up to **{top_n}**.
+A candidate is a location where removing or weakening a security checkpoint would let a
+sensitive operation execute unsafely.  Target language: **{language_label}**.
 
-Write your findings to `/tmp/candidates.json`.
-Every candidate must reference code you actually read — do NOT invent paths or lines.
-Write early and update incrementally: as soon as you have a batch of candidates,
-write the file; then extend it after each additional batch.
+**Quality over quantity.** Cover the most important files first. Stop exploring when you
+have covered the main source files — do not chase the target number at the cost of running out of steps.
 
 {codebase_tree_block}{runtime_files_block}{already_found_section}
 ---
@@ -339,101 +338,86 @@ write the file; then extend it after each additional batch.
 {{
   "repo": "/src/{project}",
   "role": "{role_name}",
-  "exploration_notes": "<one paragraph: which files you read, what patterns you found>",
+  "exploration_notes": "<which files you read, what patterns you found>",
   "candidates": [
     {{
       "file": "/absolute/path/to/file",
       "function": "function_name",
       "line_range": [start_line, end_line],
-      "checkpoint": {{
-        "type": "<checkpoint_type>",
-        "text": "<exact source line>",
-        "line": <line_number>
-      }},
-      "operation": {{
-        "type": "<operation_type>",
-        "text": "<exact source line>",
-        "line": <line_number>
-      }},
+      "checkpoint": {{"type": "<type>", "text": "<exact source line>", "line": <n>}},
+      "operation": {{"type": "<type>", "text": "<exact source line>", "line": <n>}},
       "cwe_candidates": ["CWE-XXX"],
       "cwe_groups": ["<group name>"],
-      "injection_hint": "<one sentence: how to weaken or remove the checkpoint>",
-      "reasoning": "<one sentence: why this is dangerous>",
+      "injection_hint": "<how to weaken or remove the checkpoint>",
+      "reasoning": "<why this is dangerous>",
       "confidence": <0.0–1.0>
     }}
   ]
 }}
 ```
 
-### Checkpoint types
-null_check, bounds_check, type_check, auth_guard, ownership_check, assert,
-error_check, shape_check, format_check, overflow_check, signature_check,
-lock_acquire, rate_limit, csrf_check, sanitize, path_traversal_check,
-content_type_check, size_check, redirect_check
+Checkpoint types: null_check, bounds_check, type_check, auth_guard, ownership_check, assert,
+error_check, shape_check, format_check, overflow_check, signature_check, lock_acquire,
+rate_limit, csrf_check, sanitize, path_traversal_check, content_type_check, size_check, redirect_check
 
-### Operation types
-eval_exec, deser, file_op, subprocess, data_return, state_mutation,
-memory_view, array_index, alloc, sql_exec, template_render, http_request,
-xml_parse, log_op, crypto_op, redirect_op, header_inject, cookie_op,
-regex_exec, env_write, priv_op, socket_op, reflection_op
+Operation types: eval_exec, deser, file_op, subprocess, data_return, state_mutation,
+memory_view, array_index, alloc, sql_exec, template_render, http_request, xml_parse,
+log_op, crypto_op, redirect_op, header_inject, cookie_op, regex_exec, env_write,
+priv_op, socket_op, reflection_op
 
 ---
 
-## Exploration steps
+## Workflow — follow this exact sequence
 
-**1. Create `/tmp/candidates.json` immediately (checkpoint file):**
-```bash
-cat > /tmp/candidates.json << 'JSONEOF'
-{{
-  "repo": "/src/{project}",
-  "role": "{role_name}",
-  "exploration_notes": "initial checkpoint",
-  "candidates": []
-}}
-JSONEOF
-```
-
-**2. Read your CWE reference** — do this next:
+**Step 1 — Read your CWE reference (once):**
 ```bash
 cat /tmp/cwe_reference.json
 ```
-Lists every CWE ID in scope for your specialty with its description.
 Use **only** these IDs in `cwe_candidates`. Do not invent CWE IDs.
 
-**3. Find files relevant to your specialty** from the in-scope list above:
-
+**Step 2 — Find files matching your specialty:**
 ```bash
 {search_cmd}
 ```
 
-**4. Read and analyse promising files** — repeat for as many files as needed:
+**Step 3 — Initialize the output file (once, before reading any file):**
 ```bash
-{read_cmd}
+python3 -c "import json; json.dump({{'repo':'/src/{project}','role':'{role_name}','exploration_notes':'','candidates':[]}}, open('/tmp/candidates.json','w'), indent=2)"
 ```
 
-Look for functions that:
-- Accept external or user-controlled input
-- Have a guard (`if` / `assert` / `raise`) **before** a dangerous call in your specialty
-- Are real runtime or library code (not tests, fixtures, or examples)
+**Step 4 — For EACH file, run this 3-part micro-loop. Do NOT skip the write step.**
 
-**5. Grep for exact line numbers** of dangerous calls:
-```bash
-{detail_cmd}
-```
+  **4a. Read the file:**
+  ```bash
+  {read_cmd}
+  ```
+  Look for functions that accept external input and have a guard before a dangerous call.
 
-**6. Update `/tmp/candidates.json` continuously:**
-- As soon as you have the first valid candidate, immediately write a non-empty `/tmp/candidates.json`.
-- After every **2-3 additional validated candidates**, rewrite `/tmp/candidates.json`.
-- Do not keep candidate lists only in memory.
-- Ensure `exploration_notes` reflects what you actually inspected.
+  **4b. Grep for exact line numbers of dangerous calls:**
+  ```bash
+  {detail_cmd}
+  ```
 
-**7. Verify before submit:**
+  **4c. Immediately append candidates to `/tmp/candidates.json` — do this after EVERY file:**
+  ```bash
+  python3 << 'PYEOF'
+  import json
+  data = json.load(open('/tmp/candidates.json'))
+  data['candidates'].extend([
+      # insert new candidate dicts here; leave list empty if this file had none
+  ])
+  data['exploration_notes'] += '<file> checked. '
+  json.dump(data, open('/tmp/candidates.json', 'w'), indent=2)
+  print(f"Total so far: {{len(data['candidates'])}}")
+  PYEOF
+  ```
+
+Repeat step 4 for each priority file. **Never read a new file without first writing the results of the previous one.**
+
+**Step 5 — Verify and submit (reserve your last 3 steps for this):**
 ```bash
 jq '.candidates | length' /tmp/candidates.json
-jq empty /tmp/candidates.json
 ```
-
-**8. Submit:**
 ```bash
 echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 ```
@@ -441,16 +425,12 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 ---
 
 ## Rules
-- `/tmp/candidates.json` MUST exist and contain valid JSON before you submit.
-- Every candidate MUST reference a real file from the in-scope list above, a real function name, and real line numbers you observed.
+- `/tmp/candidates.json` MUST exist and contain valid JSON when you submit — even if empty.
+- Write after EACH file. Never batch exploration across multiple files before writing.
+- Every candidate MUST reference a real file, a real function, and real line numbers you read.
 - `cwe_candidates` MUST only contain IDs from `/tmp/cwe_reference.json`.
 - Only report candidates that genuinely fit your specialty CWE groups.
-- Prefer breadth: cover as many different files and functions as possible. Avoid near-overlapping ranges from the same function.
-- Perform no more than 8 file reads before your first non-empty `/tmp/candidates.json` update.
-- Aim to reach at least **{min_target}** candidates before submitting; keep searching additional files if below target.
-- If you cannot reach **{min_target}** after thorough exploration, submit the best valid set you found.
-- If a command fails (for example regex/grep syntax), fix the command and continue; do not submit immediately after failed commands.
-- Never exit without a valid `/tmp/candidates.json` file, even if it is partial.
+- Prefer breadth: different files and functions. Avoid near-overlapping ranges from the same function.
 - Do NOT combine the submit echo with any other command.
 """
 
@@ -464,54 +444,6 @@ Skip them and focus on fresh locations only.
 
 
 _MAX_FILES_IN_PROMPT = 150  # cap to avoid bloating the context window
-
-
-_PLANNER_PROMPT_TEMPLATE = """\
-You are allocating a vulnerability analysis budget for project "{project}" ({language}).
-Your goal is to weight each specialist by how relevant its category is to THIS specific codebase.
-Do NOT default to an equal split — skew heavily toward the most relevant categories.
-
-Examples of strong skews:
-- Web framework / HTTP server -> inject injection_input with 50-60% of budget
-- C/C++ memory-heavy library -> give memory_numeric 50-60%
-- Auth / IAM service -> give access_control 50-60%
-- Async / event-driven runtime -> give concurrency_api 40-50%
-
-In-scope source files ({file_count} total):
-{file_sample}
-
-README:
-{readme_section}
-
-Specialists - allocate exactly {total_pool} total, minimum {min_each} each:
-{specialist_lines}
-
-Respond with JSON only:
-{{"injection_input": N, "memory_numeric": N, "access_control": N, "concurrency_api": N}}"""
-
-
-def build_budget_planner_prompt(
-    *,
-    project: str,
-    language: str,
-    file_count: int,
-    file_sample: str,
-    readme_section: str,
-    total_pool: int,
-    min_each: int,
-    specialist_lines: str,
-) -> str:
-    """Build the budget-allocation prompt for llm_explore planner call."""
-    return _PLANNER_PROMPT_TEMPLATE.format(
-        project=project,
-        language=language,
-        file_count=file_count,
-        file_sample=file_sample,
-        readme_section=readme_section,
-        total_pool=total_pool,
-        min_each=min_each,
-        specialist_lines=specialist_lines,
-    )
 
 
 def build_specialist_explore_task(
@@ -531,7 +463,6 @@ def build_specialist_explore_task(
     role_label: str = role["label"]
     cwe_groups: list[str] = role["cwe_groups"]
     focus: str = role["focus"]
-    min_target = max(5, min(pool_size, 15))
 
     if lang in {"javascript", "js", "node", "nodejs", "typescript", "ts"}:
         language_label = "JavaScript / TypeScript"
@@ -590,7 +521,6 @@ def build_specialist_explore_task(
         cwe_groups_str=", ".join(cwe_groups),
         focus=focus,
         top_n=pool_size,
-        min_target=min_target,
         language_label=language_label,
         codebase_tree_block=codebase_tree_block,
         runtime_files_block=runtime_files_block,

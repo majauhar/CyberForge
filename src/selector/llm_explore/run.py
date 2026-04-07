@@ -15,7 +15,6 @@ import csv
 import dataclasses
 import json
 import logging
-import math
 import os
 import re
 import subprocess
@@ -25,20 +24,14 @@ from selector.base import SelectionStrategy
 from setup.container_runtime import ContainerRuntime
 from vuljector.io_contracts import SelectionCandidate, SelectionResult, utc_now_iso
 from utils.agent import AgentRequest, run_agent_task
-from utils.agent.prompts import (
-    SECURITY_SYSTEM_TEMPLATE,
-    SPECIALIST_ROLES,
-    build_budget_planner_prompt,
-    build_specialist_explore_task,
-)
+from utils.agent.prompts import SPECIALIST_ROLES, build_specialist_explore_task, SECURITY_SYSTEM_TEMPLATE
 from utils.agent.runner import _collect_agent_env, _normalize_litellm_model_name
 from utils.codebase_snapshot import build_codebase_snapshot
 from utils.paths import cwe_categories_csv, project_root, selection_run_dir
 
 _FALLBACK_CWE_GROUP = "Input Validation"
 _FALLBACK_CWE_ID = "CWE-20"
-_SPECIALIST_POOL_SIZE = 50   # default pool per specialist; planner may adjust
-_MIN_PER_SPECIALIST = 5      # hard floor regardless of planner output
+_MIN_PER_SPECIALIST = 5      # hard minimum per specialist to ensure coverage
 
 _SCOPE_EXCLUSION_RE = (
     r"/(\.git|__pycache__|node_modules|vendor|third_party|third-party|external"
@@ -61,11 +54,7 @@ class LLMExploreStrategy(SelectionStrategy):
         pass
 
     def run(self, runtime: ContainerRuntime, request: Any) -> SelectionResult:
-        top_n = getattr(request, "max_candidates", 10) or 10
-        planning_pool = max(
-            _MIN_PER_SPECIALIST * len(SPECIALIST_ROLES),
-            math.ceil(top_n * 1.25),
-        )
+        budget = getattr(request, "max_candidates", 10) or 10
         model_id = getattr(request, "model_id", "openai/gpt-4o")
         project = request.project
         language = _selection_language(runtime)
@@ -74,21 +63,8 @@ class LLMExploreStrategy(SelectionStrategy):
         runtime_files, readme = _discover_project(runtime, project, language)
         logging.info("[%s] llm_explore: %d in-scope files", project, len(runtime_files))
 
-        allocation = _plan_budget(
-            model_id,
-            project,
-            language,
-            runtime_files,
-            readme,
-            total_pool=planning_pool,
-        )
-        logging.info(
-            "[%s] llm_explore: allocation %s (requested=%d, planning_pool=%d)",
-            project,
-            allocation,
-            top_n,
-            planning_pool,
-        )
+        allocation = _plan_budget(model_id, project, language, runtime_files, readme, budget)
+        logging.info("[%s] llm_explore: allocation %s", project, allocation)
 
         codebase_tree = build_codebase_snapshot(str(project_root(project)))
         all_candidates: list[SelectionCandidate] = []
@@ -96,7 +72,7 @@ class LLMExploreStrategy(SelectionStrategy):
 
         for role in SPECIALIST_ROLES:
             role_name: str = role["name"]
-            pool_size = allocation.get(role_name, _SPECIALIST_POOL_SIZE)
+            pool_size = allocation[role_name]
             logging.info("[%s] llm_explore: specialist '%s' (pool=%d)", project, role_name, pool_size)
 
             setup_cmds = runtime.pre_agent_setup_commands(
@@ -119,7 +95,7 @@ class LLMExploreStrategy(SelectionStrategy):
                 ),
                 workdir=runtime.repo_dir_in_container,
                 system_template=SECURITY_SYSTEM_TEMPLATE,
-                step_limit=40,
+                step_limit=50,
                 cost_limit=0.5,
                 setup_commands=setup_cmds,
                 extract_paths=["/tmp/candidates.json"],
@@ -143,13 +119,36 @@ class LLMExploreStrategy(SelectionStrategy):
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),
             selection_strategy_id=self.id,
-            candidates=_merge_candidates(all_candidates, top_n),
+            candidates=_merge_candidates(all_candidates, budget),
         )
 
 
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
+
+_PLANNER_PROMPT = """\
+You are allocating a vulnerability analysis budget for project "{project}" ({language}).
+Your goal is to weight each specialist by how relevant its category is to THIS specific codebase.
+Do NOT default to an equal split — skew heavily toward the most relevant categories.
+
+Examples of strong skews:
+- Web framework / HTTP server → inject injection_input with 50-60% of budget
+- C/C++ memory-heavy library → give memory_numeric 50-60%
+- Auth / IAM service → give access_control 50-60%
+- Async / event-driven runtime → give concurrency_api 40-50%
+
+In-scope source files ({file_count} total):
+{file_sample}
+
+README:
+{readme_section}
+
+Specialists — allocate exactly {total_pool} total, minimum {min_each} each:
+{specialist_lines}
+
+Respond with JSON only:
+{{"injection_input": N, "memory_numeric": N, "access_control": N, "concurrency_api": N}}"""
 
 
 def _plan_budget(
@@ -158,24 +157,21 @@ def _plan_budget(
     language: str,
     runtime_files: list[str],
     readme: str,
-    *,
-    total_pool: int,
+    budget: int,
 ) -> dict[str, int]:
+    total_pool = budget
+
     file_sample = "\n".join(runtime_files[:60])
     if len(runtime_files) > 60:
         file_sample += f"\n... and {len(runtime_files) - 60} more"
     readme_section = (readme[:2500] + "\n[truncated]") if len(readme) > 2500 else (readme or "(none)")
     specialist_lines = "\n".join(f'- {r["name"]}: {r["focus"][:120]}' for r in SPECIALIST_ROLES)
 
-    prompt = build_budget_planner_prompt(
-        project=project,
-        language=language,
-        file_count=len(runtime_files),
-        file_sample=file_sample,
-        readme_section=readme_section,
-        total_pool=total_pool,
-        min_each=_MIN_PER_SPECIALIST,
-        specialist_lines=specialist_lines,
+    prompt = _PLANNER_PROMPT.format(
+        project=project, language=language,
+        file_count=len(runtime_files), file_sample=file_sample,
+        readme_section=readme_section, total_pool=total_pool,
+        min_each=_MIN_PER_SPECIALIST, specialist_lines=specialist_lines,
     )
 
     env = _collect_agent_env(AgentRequest(model_id=model_id, prompt="", workdir="/tmp"))
@@ -280,7 +276,7 @@ def _cwe_mount_command(cwe_groups: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _parse_candidates(
-    project: str, raw_json: str, top_n: int, id_prefix: str = "llm",
+    project: str, raw_json: str, limit: int, id_prefix: str = "llm",
 ) -> list[SelectionCandidate]:
     if not raw_json.strip():
         logging.warning("[%s] llm_explore: no candidates.json", project)
@@ -293,7 +289,7 @@ def _parse_candidates(
 
     raw_list: list[dict] = data if isinstance(data, list) else data.get("candidates", [])
     results: list[SelectionCandidate] = []
-    for rank, item in enumerate(raw_list[:top_n], start=1):
+    for rank, item in enumerate(raw_list[:limit], start=1):
         cwe_candidates: list[str] = item.get("cwe_candidates", [])
         cwe_groups: list[str] = item.get("cwe_groups", [])
         lr = item.get("line_range")
@@ -321,19 +317,18 @@ def _parse_candidates(
     return results
 
 
-def _merge_candidates(all_candidates: list[SelectionCandidate], top_n: int) -> list[SelectionCandidate]:
-    best: dict[tuple[str, str, int | None], SelectionCandidate] = {}
+def _merge_candidates(all_candidates: list[SelectionCandidate], budget: int) -> list[SelectionCandidate]:
+    best: dict[tuple[str, str], SelectionCandidate] = {}
     for c in all_candidates:
-        line_start = c.line_range[0] if c.line_range else None
-        key = (c.repo_path, c.symbol, line_start)
+        key = (c.repo_path, c.symbol)
         if key not in best or c.confidence > best[key].confidence:
             best[key] = c
 
     sorted_candidates = sorted(best.values(), key=lambda c: c.confidence, reverse=True)
-    if len(sorted_candidates) < top_n:
-        logging.warning("llm_explore: pool has %d unique candidates, fewer than %d requested", len(sorted_candidates), top_n)
+    if len(sorted_candidates) < budget:
+        logging.warning("llm_explore: pool has %d unique candidates, fewer than %d requested", len(sorted_candidates), budget)
 
     return [
         dataclasses.replace(c, candidate_id=f"llm_multi_{rank:04d}", rank=rank)
-        for rank, c in enumerate(sorted_candidates[:top_n], start=1)
+        for rank, c in enumerate(sorted_candidates[:budget], start=1)
     ]
