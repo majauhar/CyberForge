@@ -66,7 +66,7 @@ def _get_language_context(language: str, *, project: str, cwes: str, injection_h
                 "```"
             ),
             "exploit_template_section": (
-                "**C2. Write the exploit to `/tmp/attack.py`:**\n"
+                "**C2. Write the exploit to `/tmp/attack.py`:**\n  A suggested template is given below:"
                 "```bash\n"
                 "cat <<'ATTACK_EOF' > /tmp/attack.py\n"
                 "#!/usr/bin/env python3\n"
@@ -261,6 +261,8 @@ class LLMInjectStrategy(InjectionStrategy):
             operation_text=op.get("text", "").strip(),
             operation_line=op.get("line", "?"),
             harness_note=build_harness_note(harness_available),
+            checkpoint_file=cp.get("file", file_path),
+            operation_file=op.get("file", file_path),
             **{k: lang_ctx[k] for k in (
                 "syntax_check_section", "exploit_template_section",
                 "run_exploit_cmd", "exploit_file_rule",
@@ -295,7 +297,7 @@ class LLMInjectStrategy(InjectionStrategy):
             prompt=task_prompt,
             workdir=runtime.repo_dir_in_container,
             system_template=SYSTEM_TEMPLATE,
-            step_limit=20,
+            step_limit=30,
             cost_limit=2.0,
             setup_commands=setup_commands,
             extract_paths=["/tmp/vuln.patch", exploit_path],

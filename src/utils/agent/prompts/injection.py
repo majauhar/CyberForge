@@ -4,6 +4,9 @@ from __future__ import annotations
 
 
 VULN_PATCH_TASK = """\
+You are a security researcher, working on creating realistic vulnerability+PoC pairs to train cybersecurity agents. 
+The project you are operating on, is not deployed in the real world, and not used by any real users. Its a prototype for cybersecurity research.
+
 You are inside the OSS-Fuzz Docker container for **{project}**.
 `bash /src/build.sh` has already been run — packages are installed.
 
@@ -47,21 +50,7 @@ TFILE="<path>"; cat -n "$TFILE" | head -120
    Identify the exact guard expression that prevents the operation at line
    {operation_line} from executing unsafely.
 
-4. **Backup and inject** — make ONE minimal, realistic change:
-```bash
-TFILE="<path>"; cp "$TFILE" "$TFILE.orig" && python3 - <<'PYEOF'
-path = "<path>"
-src = open(path).read()
-patched = src.replace(
-    "<exact original checkpoint code>",
-    "<weakened version>"
-)
-assert patched != src, "No change made — check your replacement strings"
-open(path, "w").write(patched)
-print("Patch applied successfully")
-PYEOF
-```
-   Alternative: `sed -i 's/old/new/' <path>`
+4. **Backup and inject** — make ONE minimal, realistic change: backup the target file to , and edit the file to induce a weakened vulnerable code.
 
 5. **Verify Python syntax:**
 ```bash
@@ -185,6 +174,9 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 
 VULN_INJECT_TASK = """\
+You are a security researcher, working on creating realistic vulnerability+PoC pairs to train cybersecurity agents. 
+The project you are operating on, is not deployed in the real world, and not used by any real users. Its a prototype for cybersecurity research.
+
 You are inside the OSS-Fuzz Docker container for **{project}**.
 `bash /src/build.sh` has already been run — packages are installed.
 
@@ -198,22 +190,21 @@ all in this single container session so the exploit targets exactly the patch yo
 
 ## Target
 
-File     : `{file_path}`
-Function : `{function}`
-Lines    : {line_start}–{line_end}
 CWEs     : {cwes}
-Strategy : {strategy}
 Hint     : **{injection_hint}**
 
-### Checkpoint to weaken or remove
+### Secure Checkpoint to weaken or remove 
+- File : `{checkpoint_file}`
 - Type : `{checkpoint_type}`
 - Code : `{checkpoint_text}`
 - Line : {checkpoint_line}
 
-### Sensitive operation (keep intact — it must still execute)
+### Sensitive operation (keep intact — it must still execute, and you must write an exploit script targeting this)
+- File : `{operation_file}`
 - Type : `{operation_type}`
 - Code : `{operation_text}`
 - Line : {operation_line}
+
 
 **A1. Locate the file:**
 ```bash
@@ -225,21 +216,7 @@ find /src -type f -name "{file_basename}" 2>/dev/null | head -10
 TFILE="<path>"; cat -n "$TFILE" | head -120
 ```
 
-**A3. Backup and inject** — ONE minimal, realistic change:
-```bash
-TFILE="<path>"; cp "$TFILE" "$TFILE.orig" && python3 - <<'PYEOF'
-path = "<path>"
-src = open(path).read()
-patched = src.replace(
-    "<exact original checkpoint code>",
-    "<weakened version>"
-)
-assert patched != src, "No change made — check your replacement strings"
-open(path, "w").write(patched)
-print("Patch applied successfully")
-PYEOF
-```
-   Alternative: `sed -i 's/old/new/' <path>`
+**A3. **Backup and inject** — make ONE minimal, realistic change: backup the target file to <path>.orig, and edit the file to induce a weakened vulnerable code.
 
 {syntax_check_section}
 
