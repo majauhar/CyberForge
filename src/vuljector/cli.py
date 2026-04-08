@@ -9,6 +9,7 @@ import sys
 from utils.paths import selection_run_dir
 from vuljector.core import build_runtime, load_project_config
 from vuljector.run_init import run_init
+from vuljector.run_cve_injection import run_cve_injection
 from vuljector.run_cve_report import run_cve_report
 from vuljector.run_injection import run_injection
 from vuljector.run_selection import run_selection
@@ -68,6 +69,15 @@ def main() -> None:
     p_run.add_argument("--num-vulnerabilities", type=int, default=1)
     p_run.add_argument("--debug", action="store_true")
 
+    p_cve_inj = sub.add_parser("cve-injection", help="Inject vulnerabilities inspired by real CVEs (no selection phase required)")
+    p_cve_inj.add_argument("project")
+    p_cve_inj.add_argument("model_id")
+    p_cve_inj.add_argument("--num-vulnerabilities", type=int, default=1,
+                            help="Number of successful injections to produce (default: 1)")
+    p_cve_inj.add_argument("--max-cves", type=int, default=10,
+                            help="Maximum CVEs to fetch and attempt (default: 10)")
+    p_cve_inj.add_argument("--debug", action="store_true")
+
     p_cve = sub.add_parser("cve-report", help="Generate CVE report for an existing vulnerability")
     p_cve.add_argument("project")
     p_cve.add_argument("vulnerability_id", help="e.g. vulnerability_5")
@@ -89,6 +99,21 @@ def main() -> None:
                        help="Filter by selection strategy (e.g. static_analysis, llm_explore). Default: all.")
 
     args = parser.parse_args()
+
+    if args.command == "cve-injection":
+        try:
+            payload = run_cve_injection(
+                project=args.project,
+                model_id=args.model_id,
+                num_vulnerabilities=args.num_vulnerabilities,
+                max_cves=args.max_cves,
+                debug=args.debug,
+            )
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(payload, indent=2))
+        return
 
     if args.command == "cve-report":
         try:

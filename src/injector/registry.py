@@ -1,10 +1,12 @@
 """Maps injection_strategy_id -> InjectionStrategy implementation."""
 
 from injector.base import InjectionStrategy
+from injector.cve_inject.run import CVEInjectStrategy
 from injector.llm_inject.run import LLMInjectStrategy
 
 INJECTOR_REGISTRY: dict[str, type[InjectionStrategy]] = {
     "llm_inject": LLMInjectStrategy,
+    "cve_inject": CVEInjectStrategy,
 }
 
 

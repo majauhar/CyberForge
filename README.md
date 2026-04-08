@@ -148,21 +148,35 @@ Runs a mini-swe-agent inside the project container to autonomously explore the r
 identify injection candidates. Writes `/tmp/candidates.json` in PipelineOutput format.
 Works for any language.
 
-## Injection Strategy
+## Injection Strategies
 
 ### `llm_inject`
 
-Runs two sequential mini-swe-agent calls against a fresh container (ephemeral, isolated from
-the persistent phase container):
+Runs a mini-swe-agent call against a fresh ephemeral container. Given a candidate location and
+CWE hint (from any selection strategy), the agent injects a minimal vulnerability and writes a
+PoC exploit in one shot. Language-aware prompts for Python, C/C++, and generic bash fallback.
 
-1. **Inject** — given candidate location + CWE, agent modifies source files to introduce the
-   vulnerability and writes `/tmp/vuln.patch` (git diff format).
-2. **Exploit** — agent writes a PoC at `/tmp/attack.py` (or `attack.sh` for C/bash targets),
-   runs it inside the container, verifies it triggers.
+### `cve_inject`
 
-Language-aware prompts for Python, C/C++, and generic bash fallback.
+CVE-inspired injection that requires no prior selection phase. Fetches real CVEs for the project
+from [OSV.dev](https://osv.dev), retrieves the fixing commit diff via the GitHub API, and gives
+an LLM agent that diff + CVE metadata as context to re-introduce the vulnerability in the current
+codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent
+pattern elsewhere.
 
-The patch is then applied to the persistent container and verified:
+```bash
+# No selection step needed — CVEs are fetched automatically
+uv run vuljector cve-injection flask claude-sonnet-4-6 --num-vulnerabilities 2 --max-cves 5
+```
+
+CVEs are ordered by severity (CRITICAL → HIGH → MEDIUM → LOW) then by most recent publication
+date. Each CVE is retried up to 3 times in round-robin before the run gives up.
+
+The fix diff is pre-filtered to strip test/doc files before being passed to the agent.
+
+### Shared verification
+
+Regardless of strategy, the patch is applied to the persistent container and verified:
 
 ```
 exploit on vulnerable code  →  expects non-zero exit (triggered)

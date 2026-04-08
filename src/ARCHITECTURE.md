@@ -114,11 +114,12 @@ core classes (including abstract interfaces).
 Vuljector/src/
 │
 ├── vuljector/
-│   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, run, cve-report
+│   ├── cli.py                      # CLI entrypoint; subcommands: setup, selection, injection, cve-injection, run, cve-report
 │   ├── core.py                     # shared plumbing for config, runtime, state checks, persistence
 │   ├── run_setup.py                # run setup as a first-class independent phase
 │   ├── run_selection.py            # require setup; run selector; persist candidates.json
 │   ├── run_injection.py            # consume candidates + injector + verifier + dataset persist; --debug route
+│   ├── run_cve_injection.py        # fetch CVEs from OSV.dev, synthesise candidates, delegate to run_injection
 │   ├── cve_report.py               # generate CVE JSON 5.0 record after successful injection
 │   └── io_contracts.py             # dataclasses for request/result payloads; to_dict/from_dict
 │
@@ -131,8 +132,11 @@ Vuljector/src/
 ├── injector/
 │   ├── base.py                     # InjectionStrategy ABC; id, setup, run
 │   ├── registry.py                 # maps strategy_id -> InjectionStrategy impl
-│   └── <injector_id>/
-│       └── run.py                  # concrete injection strategy; typically calls swe_agent
+│   ├── llm_inject/
+│   │   └── run.py                  # LLMInjectStrategy: agent injects at a given candidate location
+│   └── cve_inject/
+│       ├── cve_fetcher.py          # OSV.dev query, GitHub commit diff fetch, noise filtering → CVEData list
+│       └── run.py                  # CVEInjectStrategy: agent re-introduces vulnerability guided by CVE fix diff
 │
 ├── setup/
 │   ├── container_runtime.py        # ContainerRuntime: build, start, exec, copy, .git backup/restore
@@ -162,6 +166,7 @@ Vuljector/src/
     - `setup`
     - `selection`
     - `injection` (with `--debug` flag)
+    - `cve-injection` (CVE-inspired injection; no prior selection phase required; calls `run_cve_injection.py`)
     - `run` (optional convenience wrapper: runs `setup` if needed, then `selection`, then `injection`)
     - `cve-report` (generate a CVE JSON 5.0 record for an existing vulnerability)
 - `core.py`:
@@ -177,6 +182,8 @@ Vuljector/src/
   - require setup state, run selector strategy, persist `candidates.json`.
 - `run_injection.py`:
   - consume candidates + run injector strategy + verifier + dataset persist; honors `debug` flag for artifact location (`vulnerabilities/` vs `debug/success/` or `debug/failed/`).
+- `run_cve_injection.py`:
+  - fetches CVEs from OSV.dev for the project, resolves fixing commit diffs via GitHub API, synthesises `SelectionCandidate` objects (with CVE data in `extra`), and delegates to `run_injection()` with `strategy_id="cve_inject"`. Implements round-robin retry (up to 3× per CVE).
 - `cve_report.py`:
   - after successful injection, runs a mini-agent task inside the project container to analyse the patch diff and exploit script.
   - the agent selects a CWE from the approved list (`utils/cwe/cwe_categories.csv`) and writes `/tmp/cve_analysis.json`.
