@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from injector.cve_inject.cve_fetcher import CVEData, fetch_cve_candidates
+from injector.cve_inject.cve_fetcher import CVEData, prepare_cve_candidates
 from utils.json_io import write_json
 from utils.paths import new_run_id, selection_run_dir
 from vuljector.core import load_project_config
@@ -39,6 +39,8 @@ def _cve_to_candidate(cve: CVEData, rank: int) -> SelectionCandidate:
             "cwes": cve.cwes,
             "fix_commit_sha": cve.fix_commit_sha,
             "fix_diff": cve.fix_diff,
+            "retry_limit": _MAX_RETRIES_PER_CVE,
+            "queue_key": cve.cve_id or cve.vuln_id,
         },
     )
 
@@ -52,14 +54,11 @@ def run_cve_injection(
     debug: bool = False,
 ) -> dict:
     """
-    Fetch CVEs for the project, synthesise selection candidates, then run
-    injection with the cve_inject strategy.
-
-    Each CVE becomes one attempt; stops after num_vulnerabilities successes
-    or after exhausting all resolved CVEs (up to max_cves).
+    Prepare an ordered usable CVE list for the project, then run injection with
+    the cve_inject strategy.
     """
     config = load_project_config(project)
-    cve_list = fetch_cve_candidates(
+    cve_list = prepare_cve_candidates(
         main_repo_url=config.main_repo_url,
         language=config.language,
         project=project,
@@ -68,19 +67,9 @@ def run_cve_injection(
     if not cve_list:
         raise ValueError(f"No CVEs with resolvable fix diffs found for '{project}'")
 
-    logger.info("[%s] %d CVE candidates resolved; running injection ...", project, len(cve_list))
-
-    # Build a round-robin retry list: [A, B, C, A, B, C, A, B, C] for up to
-    # _MAX_RETRIES_PER_CVE passes. Suffixing the candidate_id with _rN keeps
-    # attempt dirs unique while the CVE data (fix_diff, etc.) stays identical.
-    # run_injection() stops as soon as num_vulnerabilities successes are reached.
-    candidates: list[SelectionCandidate] = []
-    for attempt in range(_MAX_RETRIES_PER_CVE):
-        for cve in cve_list:
-            c = _cve_to_candidate(cve, len(candidates))
-            if attempt > 0:
-                c.candidate_id = f"{c.candidate_id}_r{attempt}"
-            candidates.append(c)
+    target_vulnerabilities = min(num_vulnerabilities, len(cve_list))
+    logger.info("[%s] %d ordered CVE candidates prepared; running injection ...", project, len(cve_list))
+    candidates = [_cve_to_candidate(cve, rank) for rank, cve in enumerate(cve_list)]
 
     # Write a synthetic candidates.json so the standard run_injection() can consume it.
     sel_run_id = new_run_id("cve_select")
@@ -100,6 +89,6 @@ def run_cve_injection(
         strategy_id="cve_inject",
         model_id=model_id,
         candidates_file=candidates_file,
-        num_vulnerabilities=num_vulnerabilities,
+        num_vulnerabilities=target_vulnerabilities,
         debug=debug,
     )

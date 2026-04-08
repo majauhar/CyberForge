@@ -50,7 +50,7 @@ def build_harness_note(harness_available: bool) -> str:
     """Return a one-line note about harness availability for injection prompts."""
     if harness_available:
         return (
-            "A test harness is pre-installed at `/tmp/test_harness.sh`. "
+            "A test harness is pre-installed at `/workspace/run/unit_tests/test.sh`. "
             "Run it to verify the patch doesn't break existing tests."
         )
     return (

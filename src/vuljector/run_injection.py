@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 import logging
 import shutil
@@ -105,10 +106,17 @@ def run_injection(
         successes = 0
         vulnerability_ids: list[str] = []
         attempt_summaries: list[dict] = []
+        queue = deque(sorted_candidates)
+        attempt_counts: dict[str, int] = {}
+        attempt_idx = 0
 
-        for attempt_idx, candidate in enumerate(sorted_candidates):
-            if successes >= num_vulnerabilities:
-                break
+        while queue and successes < num_vulnerabilities:
+            candidate = queue.popleft()
+            candidate_extra = candidate.extra or {}
+            queue_key = str(candidate_extra.get("queue_key") or candidate.candidate_id)
+            retry_limit = max(1, int(candidate_extra.get("retry_limit") or 1))
+            attempt_counts[queue_key] = attempt_counts.get(queue_key, 0) + 1
+            attempt_no = attempt_counts[queue_key]
 
             # Each injection attempt uses a fresh container (via run_agent_task),
             # so no repo reset is needed between attempts.
@@ -117,8 +125,8 @@ def run_injection(
             attempt_dir.mkdir(parents=True, exist_ok=True)
 
             logger.info(
-                "[%s] injection attempt %d/%d: candidate=%s",
-                project, attempt_idx + 1, len(sorted_candidates), candidate.candidate_id,
+                "[%s] injection attempt %d: candidate=%s retry=%d/%d",
+                project, attempt_idx + 1, candidate.candidate_id, attempt_no, retry_limit,
             )
 
             request = InjectionRequest(
@@ -234,6 +242,9 @@ def run_injection(
                 "failure_cause": verification_result.failure_cause,
                 "vulnerability_id": vulnerability_id,
             })
+            if verification_result.status != "success" and attempt_no < retry_limit:
+                queue.append(candidate)
+            attempt_idx += 1
 
         # Final summary written once after all attempts.
         payload = {

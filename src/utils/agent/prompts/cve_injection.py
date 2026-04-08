@@ -34,15 +34,23 @@ your first task is to identify only the security-relevant hunks.
 # Part A — Understand and Locate
 
 **A1. Identify the security-relevant hunks:**
-Study the `-` lines (removed code). What dangerous pattern did the fix eliminate
-or guard against? What is the vulnerable operation, and what check protects it now?
+Study the `-` lines (removed code). Answer concretely:
+- What dangerous operation exists in the vulnerable code?
+- What check or guard did the fix add (or what dangerous code did it remove)?
+- Without that guard, what bad state or operation can occur?
 
-**A2. Search the current codebase for an equivalent pattern:**
+**A2. Identify the exploit vector:**
+From A1, derive: what specific input or condition would bypass the removed check and
+reach the dangerous operation? Write this down explicitly — it will directly determine
+both your injection target and your exploit. If you cannot state the exploit vector
+clearly, re-read the diff.
+
+**A3. Search the current codebase for an equivalent pattern:**
 ```bash
 grep -rn "<key_identifier_from_fix>" /src/{project} 2>/dev/null | head -20
 ```
 
-**A3. Read the target file and pick the best injection point:**
+**A4. Read the target file and pick the best injection point:**
 ```bash
 cat -n <identified_file> | head -120
 ```
@@ -87,6 +95,17 @@ cat -n <path> | head -80
 
 {run_exploit_cmd}
 
+**C3. Differential check — CRITICAL:**
+Before moving on, reason through these two scenarios:
+- **On CLEAN code** (original, with the fix in place): does your exploit reach the dangerous
+  operation? It **must NOT** — the guard blocks it.
+- **On your INJECTED code** (guard removed): does your exploit reach the dangerous operation?
+  It **MUST** — and the operation must trigger a detectable effect (crash, error, non-zero exit).
+
+If your exploit would trigger on BOTH versions, either your injection did not actually remove
+the guard, or your exploit does not specifically exercise the guarded code path. Fix whichever
+is wrong before continuing.
+
 Iterate and refine if the exploit did not trigger the vulnerability.
 
 ---
@@ -96,7 +115,7 @@ Iterate and refine if the exploit did not trigger the vulnerability.
 {harness_note}
 
 ```bash
-bash /tmp/test_harness.sh 2>&1 | tail -30; echo "HARNESS_EXIT:$?"
+bash /workspace/run/unit_tests/test.sh 2>&1 | tail -30; echo "HARNESS_EXIT:$?"
 ```
 
 ---
@@ -113,5 +132,6 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 {exploit_file_rule}
 - Make ONE minimal patch change — a plausible developer mistake.
 - The injected vulnerability should match CWE: {cwes}.
+- The exploit MUST trigger on the injected code and NOT trigger on the original code.
 - Do NOT combine the submit echo with any other command.
 """

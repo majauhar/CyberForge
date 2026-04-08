@@ -105,7 +105,7 @@ class CVEInjectStrategy(InjectionStrategy):
             prompt=task_prompt,
             workdir=runtime.repo_dir_in_container,
             system_template=SYSTEM_TEMPLATE,
-            step_limit=20,
+            step_limit=40,
             cost_limit=2.0,
             setup_commands=setup_commands,
             extract_paths=["/tmp/vuln.patch", exploit_path],

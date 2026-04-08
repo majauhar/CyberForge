@@ -40,7 +40,10 @@ OPENAI_API_KEY=sk-...            # for openai/ models
 OPENAI_API_BASE=...              # custom OpenAI-compatible endpoint
 RCHAT_OSS_API_BASE=...           # internal RCHAT proxy
 RCHAT_OSS_API_KEY=...
+GITHUB_TOKEN=ghp_...             # recommended for cve_inject: raises GitHub API limit from 60 to 5 000 req/hr
 ```
+
+Generate a token at <https://github.com/settings/tokens> (no scopes required for public repos).
 
 ### Prerequisites
 
@@ -169,8 +172,13 @@ pattern elsewhere.
 uv run vuljector cve-injection flask claude-sonnet-4-6 --num-vulnerabilities 2 --max-cves 5
 ```
 
-CVEs are ordered by severity (CRITICAL → HIGH → MEDIUM → LOW) then by most recent publication
-date. Each CVE is retried up to 3 times in round-robin before the run gives up.
+Vuljector first discovers and orders the project's CVEs by severity (CRITICAL → HIGH → MEDIUM
+→ LOW) and then by most recent publication date. It prepares up to `--max-cves` usable CVEs for
+the run by fetching commit diffs only for the highest-ranked entries until it has an ordered
+worklist. Injection then runs from that prepared list with a retry queue: failed CVEs are
+re-appended up to 3 total tries, successful CVEs are not retried, and `--max-cves` is the size
+of the prepared worklist, not a pre-expanded duplicate attempt list. The requested vulnerability
+count is capped to the number of prepared CVEs for the project.
 
 The fix diff is pre-filtered to strip test/doc files before being passed to the agent.
 

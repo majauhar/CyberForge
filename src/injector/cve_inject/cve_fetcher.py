@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -43,6 +45,18 @@ class CVEData:
     cwes: list[str]
     fix_commit_sha: str
     fix_diff: str         # pre-filtered, capped at _MAX_DIFF_CHARS
+
+
+@dataclass
+class CVEStub:
+    vuln_id: str
+    cve_id: str
+    description: str
+    cvss: str
+    severity: str
+    published: str
+    cwes: list[str]
+    records: list[dict]
 
 
 # ─── OSV query ────────────────────────────────────────────────────────────────
@@ -126,6 +140,43 @@ def _extract_cwes(record: dict) -> list[str]:
     return list(dict.fromkeys(cwes))  # deduplicate, preserve order
 
 
+def _best_severity(records: list[dict]) -> str:
+    best = "unknown"
+    best_rank = 0
+    for record in records:
+        sev = _extract_severity(record)
+        rank = _SEVERITY_RANK.get(sev, 0)
+        if rank > best_rank:
+            best = sev
+            best_rank = rank
+    return best
+
+
+def _pick_preferred_record(records: list[dict]) -> dict:
+    def key(record: dict) -> tuple[int, str, int, int]:
+        summary = record.get("summary") or ""
+        details = record.get("details") or ""
+        return (
+            _SEVERITY_RANK.get(_extract_severity(record), 0),
+            str(record.get("published") or ""),
+            1 if _extract_cvss(record) != "unknown" else 0,
+            len(summary) + len(details),
+        )
+
+    return max(records, key=key)
+
+
+def _records_for_resolution(records: list[dict]) -> list[dict]:
+    def key(record: dict) -> tuple[int, int, str]:
+        return (
+            1 if _extract_fix_sha(record) else 0,
+            _SEVERITY_RANK.get(_extract_severity(record), 0),
+            str(record.get("published") or ""),
+        )
+
+    return sorted(records, key=key, reverse=True)
+
+
 # ─── Fix commit resolution ─────────────────────────────────────────────────────
 
 _COMMIT_URL_RE = re.compile(r"github\.com/[^/]+/[^/]+/(?:pull/\d+/)?commits?/([0-9a-f]{7,40})")
@@ -153,15 +204,38 @@ def _github_slug_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _github_auth_headers() -> dict[str, str]:
+    headers: dict[str, str] = {
+        "Accept": "application/vnd.github.v3.diff",
+        "User-Agent": "vuljector",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return headers
+
+
 def _fetch_github_diff(slug: str, sha: str) -> str:
     url = _GITHUB_COMMIT_URL.format(slug=slug, sha=sha)
-    req = urllib.request.Request(
-        url,
-        headers={"Accept": "application/vnd.github.v3.diff", "User-Agent": "vuljector"},
-    )
+    req = urllib.request.Request(url, headers=_github_auth_headers())
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            remaining = exc.headers.get("X-RateLimit-Remaining", "?")
+            reset = exc.headers.get("X-RateLimit-Reset", "?")
+            if remaining == "0" or remaining == b"0":
+                logger.warning(
+                    "GitHub API rate limit exhausted (resets at epoch %s). "
+                    "Set GITHUB_TOKEN env var to raise the limit to 5 000 req/hr.",
+                    reset,
+                )
+            else:
+                logger.debug("GitHub diff fetch 403 (%s@%s): %s", slug, sha[:8], exc)
+        else:
+            logger.debug("GitHub diff fetch failed (%s@%s): %s", slug, sha[:8], exc)
+        return ""
     except Exception as exc:
         logger.debug("GitHub diff fetch failed (%s@%s): %s", slug, sha[:8], exc)
         return ""
@@ -198,19 +272,17 @@ def _filter_diff(diff_text: str) -> str:
 
 # ─── Public entry point ───────────────────────────────────────────────────────
 
-def fetch_cve_candidates(
+def discover_cves(
     main_repo_url: str,
     language: str | None,
     project: str,
-    max_cves: int = 10,
-) -> list[CVEData]:
+) -> list[CVEStub]:
     """
-    Fetch up to max_cves CVEs with resolvable fix diffs for the given project.
+    Discover CVEs for the project using OSV metadata only.
 
-    Returns CVEData list sorted by CVSS score descending (unknown scores last).
+    Returns unique CVEs sorted by severity descending, then most recent first.
     """
     github_slug = _github_slug_from_url(main_repo_url)
-
     # Collect OSV records, deduplicating by OSV id
     seen_ids: set[str] = set()
     records: list[dict] = []
@@ -225,59 +297,100 @@ def fetch_cve_candidates(
         logger.info("[%s] No OSV records found", project)
         return []
 
-    logger.info("[%s] Found %d OSV records; resolving fix diffs ...", project, len(records))
+    logger.info("[%s] Found %d OSV records; building ranked CVE list ...", project, len(records))
 
-    # Build CVE-ID → best severity across all records (GHSA records have severity
-    # but not fix SHAs; PYSEC records have fix SHAs but not severity — cross-link them).
-    cve_severity: dict[str, str] = {}
+    grouped: dict[str, list[dict]] = {}
     for rec in records:
-        sev = _extract_severity(rec)
-        if sev == "unknown":
-            continue
         cve_id = _extract_cve_id(rec)
-        if cve_id and cve_id not in cve_severity:
-            cve_severity[cve_id] = sev
+        grouped.setdefault(cve_id, []).append(rec)
 
-    results: list[CVEData] = []
-    for record in records:
-        if len(results) >= max_cves:
-            break
-
-        fix_sha = _extract_fix_sha(record)
-        if not fix_sha:
-            continue
-
-        # Prefer GitHub API for diff; only works when repo is on GitHub
-        if not github_slug:
-            logger.debug("[%s] No GitHub slug; skipping %s", project, record.get("id"))
-            continue
-
-        raw_diff = _fetch_github_diff(github_slug, fix_sha)
-        filtered = _filter_diff(raw_diff)
-        if not filtered:
-            logger.debug("[%s] Empty filtered diff for %s@%s", project, record.get("id"), fix_sha[:8])
-            continue
-
-        cve_id = _extract_cve_id(record)
-        severity = _extract_severity(record)
-        if severity == "unknown":
-            severity = cve_severity.get(cve_id, "unknown")
-        results.append(CVEData(
-            vuln_id=record.get("id", cve_id),
+    results: list[CVEStub] = []
+    for cve_id, cve_records in grouped.items():
+        preferred = _pick_preferred_record(cve_records)
+        severity = _best_severity(cve_records)
+        cvss = "unknown"
+        for record in cve_records:
+            cvss = _extract_cvss(record)
+            if cvss != "unknown":
+                break
+        cwes: list[str] = []
+        for record in cve_records:
+            cwes.extend(_extract_cwes(record))
+        results.append(CVEStub(
+            vuln_id=str(preferred.get("id", cve_id)),
             cve_id=cve_id,
-            description=(record.get("summary") or record.get("details") or "")[:500],
-            cvss=_extract_cvss(record),
+            description=((preferred.get("summary") or preferred.get("details") or "")[:500]),
+            cvss=cvss,
             severity=severity,
-            published=record.get("published") or "",
-            cwes=_extract_cwes(record),
-            fix_commit_sha=fix_sha,
-            fix_diff=filtered,
+            published=str(preferred.get("published") or ""),
+            cwes=list(dict.fromkeys(cwes)),
+            records=_records_for_resolution(cve_records),
         ))
-        logger.info("[%s] Resolved fix diff for %s severity=%s (%d chars)", project, cve_id, _extract_severity(record), len(filtered))
 
     # Sort: highest severity first, then most recently published first.
     # CVEs without a severity label (rank 0) go last.
     # Two-pass stable sort: secondary key first, then primary.
     results.sort(key=lambda c: c.published or "", reverse=True)          # most recent first
     results.sort(key=lambda c: _SEVERITY_RANK.get(c.severity, 0), reverse=True)  # highest severity first
-    return results[:max_cves]
+    return results
+
+
+def prepare_cve_candidates(
+    main_repo_url: str,
+    language: str | None,
+    project: str,
+    max_cves: int = 10,
+) -> list[CVEData]:
+    """
+    Build the ordered, usable CVE list for this run before injection starts.
+
+    The project-wide CVE list is discovered and ranked first. Then commit diffs are
+    fetched only for the highest-ranked CVEs needed to prepare up to ``max_cves``
+    usable entries.
+    """
+    github_slug = _github_slug_from_url(main_repo_url)
+    if not github_slug:
+        logger.info("[%s] No GitHub slug; cannot resolve CVE fix diffs", project)
+        return []
+
+    stubs = discover_cves(main_repo_url=main_repo_url, language=language, project=project)
+    results: list[CVEData] = []
+    for stub in stubs:
+        if len(results) >= max_cves:
+            break
+
+        resolved: CVEData | None = None
+        for record in stub.records:
+            fix_sha = _extract_fix_sha(record)
+            if not fix_sha:
+                continue
+
+            raw_diff = _fetch_github_diff(github_slug, fix_sha)
+            filtered = _filter_diff(raw_diff)
+            if not filtered:
+                logger.debug("[%s] Empty filtered diff for %s@%s", project, stub.cve_id, fix_sha[:8])
+                continue
+
+            resolved = CVEData(
+                vuln_id=stub.vuln_id,
+                cve_id=stub.cve_id,
+                description=stub.description,
+                cvss=stub.cvss,
+                severity=stub.severity,
+                published=stub.published,
+                cwes=stub.cwes,
+                fix_commit_sha=fix_sha,
+                fix_diff=filtered,
+            )
+            break
+
+        if resolved is None:
+            logger.debug("[%s] No usable fix diff found for %s", project, stub.cve_id)
+            continue
+
+        results.append(resolved)
+        logger.info(
+            "[%s] Prepared CVE %s severity=%s (%d chars)",
+            project, resolved.cve_id, resolved.severity, len(resolved.fix_diff),
+        )
+    return results
