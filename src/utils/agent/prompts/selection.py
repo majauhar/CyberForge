@@ -322,12 +322,13 @@ You are a specialist focused **exclusively** on **{role_label}** vulnerabilities
 Do NOT report candidates outside your specialty — another agent covers those.
 
 ## Goal
-Find as many **{role_label}** vulnerability injection candidates as you can — target up to **{top_n}**.
+Find **{role_label}** vulnerability injection candidates targeting up to **{top_n}**.
 A candidate is a location where removing or weakening a security checkpoint would let a
 sensitive operation execute unsafely.  Target language: **{language_label}**.
 
-**Quality over quantity.** Cover the most important files first. Stop exploring when you
-have covered the main source files — do not chase the target number at the cost of running out of steps.
+**Breadth over exhaustion.** Explore many different files and functions rather than deep-diving into a few.
+20 candidates from 10 files is better than 50 from 2 files. Budget your steps wisely — exploration
+should take most of your effort; writing takes only 1-2 steps at the end.
 
 {codebase_tree_block}{runtime_files_block}{already_found_section}
 ---
@@ -367,9 +368,9 @@ priv_op, socket_op, reflection_op
 
 ---
 
-## Workflow — follow this exact sequence
+## Workflow — explore, then write once
 
-**Step 1 — Read your CWE reference (once):**
+**Step 1 — Read your CWE reference:**
 ```bash
 cat /tmp/cwe_reference.json
 ```
@@ -380,43 +381,94 @@ Use **only** these IDs in `cwe_candidates`. Do not invent CWE IDs.
 {search_cmd}
 ```
 
-**Step 3 — Initialize the output file (once, before reading any file):**
+**Step 3 — Explore: Read promising files and analyze**
+
+Repeat this for as many priority files as you can reach:
 ```bash
-python3 -c "import json; json.dump({{'repo':'/src/{project}','role':'{role_name}','exploration_notes':'','candidates':[]}}, open('/tmp/candidates.json','w'), indent=2)"
+{read_cmd}
+```
+**For web applications like Flask, look for:**
+- **External input sources**: request.args, request.form, request.values, request.json, request.headers,
+  request.cookies, session, current_user, file uploads
+- **Dangerous operations**:
+  - SQL: String concatenation in query building (+, %, .format() with user input)
+  - XSS/Templates: render_template_string, Markup, |safe in templates
+  - Path traversal: open(), file(), send_file() with user-controlled paths
+  - Command injection: subprocess.call, os.system, eval(), exec() with user input
+  - Deserialization: pickle.load(), yaml.load() without Loader, json.loads() with untrusted data
+- **Checkpoints (guards to weaken/remove)**:
+  - Input validation: if not validate_input(): abort(400)
+  - Sanitization: escape(), strip_tags(), bleach.clean()
+  - Parameterized queries: ? placeholders or named parameters
+  - Path safety: secure_filename(), os.path.normpath() + prefix checking
+  - Output escaping: {{ user_input }} in templates (Jinja2 autoescape), |safe removal
+  - Type checking: isinstance(), int() conversion with try/except
+  - Size limits: len() checks, request.content_length limits
+
+Then grep for exact line numbers:
+```bash
+{detail_cmd}
 ```
 
-**Step 4 — For EACH file, run this 3-part micro-loop. Do NOT skip the write step.**
+**Build your candidate list as you explore:**
+1. For each file, note 5-10 promising checkpoint-operation pairs MAX
+2. Move to next file - **breadth is prioritized over depth**
+3. Aim to explore at least 8-10 different files if possible
+4. Only read a second time from a file if you missed something critical
 
-  **4a. Read the file:**
-  ```bash
-  {read_cmd}
-  ```
-  Look for functions that accept external input and have a guard before a dangerous call.
+**Quality over quantity**: 3 high-confidence candidates from 3 different files is better than 10 low-confidence from 1 file.
 
-  **4b. Grep for exact line numbers of dangerous calls:**
-  ```bash
-  {detail_cmd}
-  ```
+**Step 4 — Write all candidates to `/tmp/candidates.json` (single write, once)**
 
-  **4c. Immediately append candidates to `/tmp/candidates.json` — do this after EVERY file:**
-  ```bash
-  python3 << 'PYEOF'
-  import json
-  data = json.load(open('/tmp/candidates.json'))
-  data['candidates'].extend([
-      # insert new candidate dicts here; leave list empty if this file had none
-  ])
-  data['exploration_notes'] += '<file> checked. '
-  json.dump(data, open('/tmp/candidates.json', 'w'), indent=2)
-  print(f"Total so far: {{len(data['candidates'])}}")
-  PYEOF
-  ```
+When you have explored enough files (prioritize breadth over completeness), write all findings at once:
 
-Repeat step 4 for each priority file. **Never read a new file without first writing the results of the previous one.**
-
-**Step 5 — Verify and submit (reserve your last 3 steps for this):**
 ```bash
-jq '.candidates | length' /tmp/candidates.json
+python3 << 'JSONEOF'
+import json
+
+data = {{
+    "repo": "/src/{project}",
+    "role": "{role_name}",
+    "exploration_notes": "Explored [list files you read here]. Found [describe patterns/vulnerabilities].",
+    "candidates": [
+        # Add all candidate dicts you identified. Example for Flask SQL injection:
+        # {{
+        #   "file": "/src/{project}/app/views.py",
+        #   "function": "show_user",
+        #   "line_range": [42, 48],
+        #   "checkpoint": {{"type": "input_validation", "text": "if not user_id.isdigit():", "line": 43}},
+        #   "operation": {{"type": "sql_exec", "text": "db.execute('SELECT * FROM users WHERE id = ' + user_id)", "line": 45}},
+        #   "cwe_candidates": ["CWE-89"],
+        #   "cwe_groups": ["Input Validation"],
+        #   "injection_hint": "Remove the digit check or use string directly",
+        #   "reasoning": "User ID concatenated directly into SQL allows injection",
+        #   "confidence": 0.9
+        # }}
+        # Example for Flask XSS:
+        # {{
+        #   "file": "/src/{project}/app/views.py",
+        #   "function": "comment",
+        #   "line_range": [67, 75],
+        #   "checkpoint": {{"type": "escape", "text": "from markupsafe import escape", "line": 12}},
+        #   "operation": {{"type": "template_render", "text": "return render_template_string('<h1>' + comment + '</h1>')", "line": 70}},
+        #   "cwe_candidates": ["CWE-79"],
+        #   "cwe_groups": ["Dynamic code"],
+        #   "injection_hint": "Remove the import or don't escape the comment",
+        #   "reasoning": "Unescaped user comment rendered in template allows XSS",
+        #   "confidence": 0.85
+        # }}
+    ]
+}}
+
+with open('/tmp/candidates.json', 'w') as f:
+    json.dump(data, f, indent=2)
+print(f"Wrote {{len(data['candidates'])}} candidates")
+JSONEOF
+```
+
+**Step 5 — Verify and submit:**
+```bash
+python3 -c "import json; d=json.load(open('/tmp/candidates.json')); print('Verified:', len(d['candidates']), 'candidates in valid JSON')"
 ```
 ```bash
 echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
@@ -425,12 +477,11 @@ echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 ---
 
 ## Rules
-- `/tmp/candidates.json` MUST exist and contain valid JSON when you submit — even if empty.
-- Write after EACH file. Never batch exploration across multiple files before writing.
-- Every candidate MUST reference a real file, a real function, and real line numbers you read.
+- `/tmp/candidates.json` MUST exist and contain valid JSON before you submit.
+- Explore broadly across different files. Do NOT spend all steps on a single file.
+- Every candidate MUST reference a real file, a real function name, and real line numbers you observed.
 - `cwe_candidates` MUST only contain IDs from `/tmp/cwe_reference.json`.
 - Only report candidates that genuinely fit your specialty CWE groups.
-- Prefer breadth: different files and functions. Avoid near-overlapping ranges from the same function.
 - Do NOT combine the submit echo with any other command.
 """
 
