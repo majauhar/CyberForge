@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
+import re
 import shutil
 import time
 from pathlib import Path
@@ -30,6 +31,13 @@ from vuljector.io_contracts import SelectionCandidate, VerificationResult, utc_n
 logger = logging.getLogger(__name__)
 
 
+def _model_run_suffix(model_id: str) -> str:
+    value = model_id.strip().replace("/", "__")
+    value = re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("._-")
+    return value or "model"
+
+
 def run_injection(
     *,
     project: str,
@@ -44,7 +52,7 @@ def run_injection(
     runtime = build_runtime(config)
     ensure_setup_completed(runtime, project)
 
-    run_id = new_run_id("injection")
+    run_id = new_run_id("injection", suffix=_model_run_suffix(model_id))
     run_dir = injection_run_dir(project, run_id)
     request_payload = {
         "project": project,

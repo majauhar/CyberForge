@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import re
 
 
 def src_root() -> Path:
@@ -43,8 +44,16 @@ def workspace_for_project(project: str) -> Path:
     return workspaces_root() / project
 
 
-def new_run_id(prefix: str) -> str:
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+def new_run_id(prefix: str, suffix: str | None = None) -> str:
+    # Parallel eval runs can start multiple phases within the same second.
+    # Include microseconds, and optionally append a readable suffix such as the
+    # model alias for easier inspection of run directories.
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    if suffix:
+        clean = re.sub(r"[^A-Za-z0-9._-]+", "_", suffix.strip())
+        clean = re.sub(r"_+", "_", clean).strip("._-")
+        if clean:
+            return f"{prefix}_{ts}_{clean}"
     return f"{prefix}_{ts}"
 
 
@@ -66,4 +75,3 @@ def injection_run_dir(project: str, run_id: str) -> Path:
 
 def agent_task_run_dir(project: str, task_type: str, run_id: str) -> Path:
     return runs_root() / "agent_tasks" / project / task_type / run_id
-
