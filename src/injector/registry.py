@@ -9,6 +9,14 @@ INJECTOR_REGISTRY: dict[str, type[InjectionStrategy]] = {
     "cve_inject": CVEInjectStrategy,
 }
 
+# Maps selection_strategy_id -> injection_strategy_id
+_SELECTION_TO_INJECTION: dict[str, str] = {
+    "cve_select": "cve_inject",
+    "llm_explore": "llm_inject",
+    "static_analysis": "llm_inject",
+    "codeql": "llm_inject",
+}
+
 
 def get_injection_strategy(strategy_id: str) -> InjectionStrategy:
     cls = INJECTOR_REGISTRY.get(strategy_id)
@@ -16,3 +24,12 @@ def get_injection_strategy(strategy_id: str) -> InjectionStrategy:
         available = list(INJECTOR_REGISTRY.keys())
         raise ValueError(f"Unknown injection strategy {strategy_id!r}. Available: {available}")
     return cls()
+
+
+def get_injection_strategy_for_selection(selection_strategy_id: str) -> InjectionStrategy:
+    """Route to injection strategy based on selection strategy."""
+    injection_strategy_id = _SELECTION_TO_INJECTION.get(selection_strategy_id)
+    if injection_strategy_id is None:
+        available = list(_SELECTION_TO_INJECTION.keys())
+        raise ValueError(f"Unknown selection strategy {selection_strategy_id!r}. Available: {available}")
+    return get_injection_strategy(injection_strategy_id)

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+
+from dotenv import load_dotenv
 
 from utils.paths import selection_run_dir
 from vuljector.core import build_runtime, load_project_config
 from vuljector.run_init import run_init
-from vuljector.run_cve_injection import run_cve_injection
 from vuljector.run_cve_report import run_cve_report
 from vuljector.run_injection import run_injection
 from vuljector.run_selection import run_selection
@@ -24,6 +26,11 @@ def _split_csv(value: str | None) -> list[str] | None:
 
 
 def main() -> None:
+    # Load environment variables from src/.env
+    env_file = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(env_file):
+        load_dotenv(env_file)
+
     parser = argparse.ArgumentParser(description="Vuljector V2 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -43,40 +50,37 @@ def main() -> None:
     p_sel = sub.add_parser("selection", help="Run selection phase")
     p_sel.add_argument("project")
     p_sel.add_argument("strategy_id")
-    p_sel.add_argument("model_id")
+    p_sel.add_argument("model_id", nargs="?", default=None,
+                       help="LiteLLM model ID (required for static_analysis, codeql, llm_explore; not needed for cve_select)")
     p_sel.add_argument("--cwe-groups", default=None)
     p_sel.add_argument("--cwe-ids", default=None)
     p_sel.add_argument("--max-candidates", type=int, default=None,
                        help="Maximum candidates to return (default: strategy default)")
 
-    p_inj = sub.add_parser("injection", help="Run injection phase")
+    p_inj = sub.add_parser("injection", help="Run injection phase (strategy auto-routes based on candidates)")
     p_inj.add_argument("project")
-    p_inj.add_argument("strategy_id")
-    p_inj.add_argument("model_id")
     p_inj.add_argument("candidates_file")
+    p_inj.add_argument("model_id", nargs="?", default=None,
+                       help="LiteLLM model ID (required for llm_inject/cve_inject)")
     p_inj.add_argument("--num-vulnerabilities", type=int, default=1)
     p_inj.add_argument("--debug", action="store_true")
 
-    p_run = sub.add_parser("run", help="Convenience wrapper")
+    p_cve_sel = sub.add_parser("cve-selection", help="Discover and rank CVEs for a project")
+    p_cve_sel.add_argument("project")
+    p_cve_sel.add_argument("--max-cves", type=int, default=10,
+                            help="Maximum CVEs to fetch (default: 10)")
+
+    p_run = sub.add_parser("run", help="Convenience wrapper: selection + injection (injection strategy auto-routes)")
     p_run.add_argument("project")
     p_run.add_argument("selection_strategy_id")
-    p_run.add_argument("injection_strategy_id")
-    p_run.add_argument("model_id")
+    p_run.add_argument("model_id", nargs="?", default=None,
+                       help="LiteLLM model ID (required unless selection_strategy_id is cve_select)")
     p_run.add_argument("--cwe-groups", default=None)
     p_run.add_argument("--cwe-ids", default=None)
     p_run.add_argument("--max-candidates", type=int, default=None,
                        help="Maximum candidates to return (default: strategy default)")
     p_run.add_argument("--num-vulnerabilities", type=int, default=1)
     p_run.add_argument("--debug", action="store_true")
-
-    p_cve_inj = sub.add_parser("cve-injection", help="Inject vulnerabilities inspired by real CVEs (no selection phase required)")
-    p_cve_inj.add_argument("project")
-    p_cve_inj.add_argument("model_id")
-    p_cve_inj.add_argument("--num-vulnerabilities", type=int, default=1,
-                            help="Number of successful injections to produce (default: 1)")
-    p_cve_inj.add_argument("--max-cves", type=int, default=10,
-                            help="Maximum CVEs to fetch and attempt (default: 10)")
-    p_cve_inj.add_argument("--debug", action="store_true")
 
     p_cve = sub.add_parser("cve-report", help="Generate CVE report for an existing vulnerability")
     p_cve.add_argument("project")
@@ -99,21 +103,6 @@ def main() -> None:
                        help="Filter by selection strategy (e.g. static_analysis, llm_explore). Default: all.")
 
     args = parser.parse_args()
-
-    if args.command == "cve-injection":
-        try:
-            payload = run_cve_injection(
-                project=args.project,
-                model_id=args.model_id,
-                num_vulnerabilities=args.num_vulnerabilities,
-                max_cves=args.max_cves,
-                debug=args.debug,
-            )
-        except Exception as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(payload, indent=2))
-        return
 
     if args.command == "cve-report":
         try:
@@ -146,6 +135,9 @@ def main() -> None:
         elif args.command == "setup":
             payload = run_setup(args.project)
         elif args.command == "selection":
+            # cve_select is programmatic; model_id not needed
+            if args.strategy_id != "cve_select" and not args.model_id:
+                parser.error("model_id is required for static_analysis, codeql, and llm_explore strategies")
             payload = run_selection(
                 project=args.project,
                 strategy_id=args.strategy_id,
@@ -155,9 +147,10 @@ def main() -> None:
                 max_candidates=args.max_candidates,
             )
         elif args.command == "injection":
+            if not args.model_id:
+                parser.error("model_id is required for injection")
             payload = run_injection(
                 project=args.project,
-                strategy_id=args.strategy_id,
                 model_id=args.model_id,
                 candidates_file=args.candidates_file,
                 num_vulnerabilities=args.num_vulnerabilities,
@@ -180,6 +173,10 @@ def main() -> None:
 
 
 def _run_convenience(args: argparse.Namespace) -> dict:
+    # cve_select is programmatic; model_id not needed
+    if args.selection_strategy_id != "cve_select" and not args.model_id:
+        raise ValueError("model_id is required for static_analysis, codeql, and llm_explore strategies")
+
     config = load_project_config(args.project)
     runtime = build_runtime(config)
     if not runtime.setup_completed():
@@ -196,7 +193,7 @@ def _run_convenience(args: argparse.Namespace) -> dict:
     candidates_path = selection_run_dir(args.project, selection_run_id) / "candidates.json"
     return run_injection(
         project=args.project,
-        strategy_id=args.injection_strategy_id,
+        strategy_id=args.selection_strategy_id,
         model_id=args.model_id,
         candidates_file=str(candidates_path),
         num_vulnerabilities=args.num_vulnerabilities,

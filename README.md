@@ -12,7 +12,7 @@ Five-phase pipeline:
 ```
 Init             Build image, detect commit, discover test harness → portable project definition
 Phase 1 — Setup      Build/cache ready container for local use
-Phase 2 — Selection  Find where to inject: static analysis, CodeQL, or LLM exploration
+Phase 2 — Selection  Find where to inject: static analysis, CodeQL, LLM exploration, or CVE
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
 Phase 4 — CVE Report  Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
 Phase 5 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
@@ -40,7 +40,7 @@ OPENAI_API_KEY=sk-...            # for openai/ models
 OPENAI_API_BASE=...              # custom OpenAI-compatible endpoint
 RCHAT_OSS_API_BASE=...           # internal RCHAT proxy
 RCHAT_OSS_API_KEY=...
-GITHUB_TOKEN=ghp_...             # recommended for cve_inject: raises GitHub API limit from 60 to 5 000 req/hr
+GITHUB_TOKEN=ghp_...             # recommended for cve_select: raises GitHub API limit from 60 to 5 000 req/hr
 ```
 
 Generate a token at <https://github.com/settings/tokens> (no scopes required for public repos).
@@ -99,15 +99,16 @@ uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
 uv run vuljector selection flask codeql claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10
-uv run vuljector injection flask llm_inject claude-sonnet-4-6 \
+uv run vuljector selection flask cve_select --max-candidates 5
+uv run vuljector injection flask \
     runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 3
 
 # Filter candidates by CWE:
 uv run vuljector selection flask static_analysis claude-sonnet-4-6 \
     --cwe-groups "Memory Safety,Injection" --cwe-ids "CWE-476,CWE-787"
 
-# Or all three phases at once:
-uv run vuljector run flask static_analysis llm_inject claude-sonnet-4-6
+# Or all phases at once (injection strategy auto-routes based on selection):
+uv run vuljector run flask static_analysis claude-sonnet-4-6
 ```
 
 ## Selection Strategies
@@ -151,6 +152,14 @@ Runs a mini-swe-agent inside the project container to autonomously explore the r
 identify injection candidates. Writes `/tmp/candidates.json` in PipelineOutput format.
 Works for any language.
 
+### `cve_select`
+
+Discovers and ranks CVEs for the project from [OSV.dev](https://osv.dev). Retrieves the fixing commit diff via the GitHub API and prepares candidates with CVE metadata (ID, description, CVSS, CWEs, fix diff). Orders CVEs by severity (CRITICAL → HIGH → MEDIUM → LOW) and publication date. Works for any language.
+
+```bash
+uv run vuljector selection flask cve_select --max-candidates 10
+```
+
 ## Injection Strategies
 
 ### `llm_inject`
@@ -161,16 +170,13 @@ PoC exploit in one shot. Language-aware prompts for Python, C/C++, and generic b
 
 ### `cve_inject`
 
-Reverse a real CVE. Fetches real CVEs for the project from [OSV.dev](https://osv.dev), retrieves the fixing commit diff via the GitHub API, and gives an LLM agent that diff + CVE metadata as context to re-introduce the vulnerability in the current codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent pattern elsewhere.
+Reverses a real CVE. Takes the CVE metadata and fix diff (from `cve_select`) as context to re-introduce the vulnerability in the current codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent pattern elsewhere and inject a semantically equivalent vulnerability.
 
 ```bash
-# No selection step needed — CVEs are fetched automatically
-uv run vuljector cve-injection flask claude-sonnet-4-6 --num-vulnerabilities 2 --max-cves 5
+uv run vuljector selection flask cve_select --max-candidates 5
+uv run vuljector injection flask \
+    runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 2 --model-id claude-sonnet-4-6
 ```
-
-Vuljector first discovers and orders the project's CVEs by severity (CRITICAL → HIGH → MEDIUM → LOW) and then by most recent publication date. It prepares up to `--max-cves` usable CVEs for the run. In case the number of CVEs for the project is less than `--max-cves`, failed injection can be re-appended up to 3 total tries. The maximum number of total injection attempts is `--max-cves`.
-
-The fix diff is pre-filtered to strip test/doc files before being passed to the agent.
 
 ### Shared verification
 

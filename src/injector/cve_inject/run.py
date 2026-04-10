@@ -1,14 +1,13 @@
 """
 CVEInjectStrategy — vulnerability injection guided by a real CVE fix diff.
 
-Expects candidate.extra to be populated by run_cve_injection.py::_cve_to_candidate():
+Expects candidate.extra to be populated by selector/cve_select/run.py with CVE data:
   extra["cve_id"]          — CVE or GHSA identifier
   extra["cve_description"] — short description
   extra["cvss"]            — CVSS vector string or "unknown"
   extra["cwes"]            — list[str]
   extra["fix_commit_sha"]  — git SHA of the fixing commit
   extra["fix_diff"]        — filtered unified diff of the fixing commit
-  extra["strategy"]        — "cve_inject"
 """
 
 from __future__ import annotations
