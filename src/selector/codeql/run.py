@@ -100,7 +100,6 @@ class CodeQLStrategy(SelectionStrategy):
                 runtime.project,
             )
             return SelectionResult(
-                schema_version="v2",
                 project=request.project,
                 run_id=request.run_id,
                 timestamp_utc=utc_now_iso(),
@@ -155,7 +154,6 @@ class CodeQLStrategy(SelectionStrategy):
             c.rank = rank
 
         return SelectionResult(
-            schema_version="v2",
             project=request.project,
             run_id=request.run_id,
             timestamp_utc=utc_now_iso(),

@@ -209,7 +209,8 @@ class ContainerRuntime:
         self.ensure_image()
         run_mount_dir.mkdir(parents=True, exist_ok=True)
         self.run_mount_dir = run_mount_dir
-        self.container_name = f"vuljector-{self.project}-{phase}"
+        run_label = run_mount_dir.name or "run"
+        self.container_name = f"vuljector-{self.project}-{phase}-{run_label}"
         # If a previous process crashed before cleanup, the name may still exist.
         # Remove it proactively so docker run doesn't fail with a conflict.
         subprocess.run(
