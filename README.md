@@ -161,24 +161,14 @@ PoC exploit in one shot. Language-aware prompts for Python, C/C++, and generic b
 
 ### `cve_inject`
 
-CVE-inspired injection that requires no prior selection phase. Fetches real CVEs for the project
-from [OSV.dev](https://osv.dev), retrieves the fixing commit diff via the GitHub API, and gives
-an LLM agent that diff + CVE metadata as context to re-introduce the vulnerability in the current
-codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent
-pattern elsewhere.
+Reverse a real CVE. Fetches real CVEs for the project from [OSV.dev](https://osv.dev), retrieves the fixing commit diff via the GitHub API, and gives an LLM agent that diff + CVE metadata as context to re-introduce the vulnerability in the current codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent pattern elsewhere.
 
 ```bash
 # No selection step needed — CVEs are fetched automatically
 uv run vuljector cve-injection flask claude-sonnet-4-6 --num-vulnerabilities 2 --max-cves 5
 ```
 
-Vuljector first discovers and orders the project's CVEs by severity (CRITICAL → HIGH → MEDIUM
-→ LOW) and then by most recent publication date. It prepares up to `--max-cves` usable CVEs for
-the run by fetching commit diffs only for the highest-ranked entries until it has an ordered
-worklist. Injection then runs from that prepared list with a retry queue: failed CVEs are
-re-appended up to 3 total tries, successful CVEs are not retried, and `--max-cves` is the size
-of the prepared worklist, not a pre-expanded duplicate attempt list. The requested vulnerability
-count is capped to the number of prepared CVEs for the project.
+Vuljector first discovers and orders the project's CVEs by severity (CRITICAL → HIGH → MEDIUM → LOW) and then by most recent publication date. It prepares up to `--max-cves` usable CVEs for the run. In case the number of CVEs for the project is less than `--max-cves`, failed injection can be re-appended up to 3 total tries. The maximum number of total injection attempts is `--max-cves`.
 
 The fix diff is pre-filtered to strip test/doc files before being passed to the agent.
 
