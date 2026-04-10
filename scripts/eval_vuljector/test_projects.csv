@@ -1,6 +1,5 @@
 projects
 flask
-requests
 sqlparse
 jsoncpp
 quickjs
