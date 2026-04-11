@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.3.1",
+    "python-dotenv>=1.0.0",
     # Agent layer — mini-swe-agent v2+ required (v1 has incompatible imports)
     "mini-swe-agent>=2.0.0",
     "litellm>=1.0.0",

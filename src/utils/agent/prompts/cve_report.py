@@ -35,10 +35,10 @@ analysis = {{
     "title":             "<one-line vulnerability title>",
     "vulnerability_type": "<e.g. Improper Input Validation, Use After Free>",
     "cwe_id":            "<CWE-N — must exist in /tmp/cwe_categories.csv>",
-    "description":       "<2-4 sentences: what was changed and why it is dangerous>",
-    "impact":            "<what an attacker can achieve>",
-    "proof_of_concept":  "<how the exploit triggers the vulnerability>",
-    "fix":               "<what the correct fix is>",
+    "description":       "<2-4 sentences: Precisely describe what is the vulnerability and why it is dangerous and which part of the code is affected>",
+    "impact":            "<Precise description of what an attacker can achieve>",
+    "proof_of_concept":  "<Precise description of how the exploit triggers the vulnerability>",
+    "fix":               "<Explanation of what the correct fix is and how it fixes the vulnerability>",
     "cvss_vector":       "<CVSS:3.1/AV:?/AC:?/PR:?/UI:?/S:?/C:?/I:?/A:?>",
 }}
 with open("/tmp/cve_analysis.json", "w") as f:
