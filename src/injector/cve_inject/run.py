@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 
 from injector.base import InjectionStrategy
-from injector.llm_inject.run import _get_language_context, _parse_post_results
+from injector.llm_inject.run import _get_language_context
 from setup.container_runtime import ContainerRuntime
 from utils.agent import AgentRequest, run_agent_task
 from utils.paths import project_root
@@ -84,15 +84,6 @@ class CVEInjectStrategy(InjectionStrategy):
         post_commands: list[str] = [
             f"cd {runtime.repo_dir_in_container} && git diff HEAD > /tmp/vuln.patch || true"
         ]
-        if harness_available:
-            post_commands.append(
-                "bash /workspace/run/unit_tests/test.sh > /tmp/harness_out.txt 2>&1"
-                "; echo HARNESS_EXIT:$?; tail -20 /tmp/harness_out.txt"
-            )
-        post_commands.append(
-            f"{lang_ctx['post_run_cmd']} > /tmp/attack_out.txt 2>&1"
-            "; echo ATTACK_EXIT:$?; tail -30 /tmp/attack_out.txt"
-        )
 
         traj_name = f"{request.attempt_dir}_trajectory.json" if request.attempt_dir else "cve_inject_trajectory.json"
         trajectory_path = str(
@@ -121,17 +112,16 @@ class CVEInjectStrategy(InjectionStrategy):
 
         patch_diff = resp.extracted_files.get("/tmp/vuln.patch", "")
         exploit_script = resp.extracted_files.get(exploit_path, "").strip()
-        harness_passed, attack_triggered = _parse_post_results(resp.post_results)
+        harness_passed, attack_triggered = False, False
 
         attempt_prefix = request.attempt_dir + "/" if request.attempt_dir else ""
         artifacts_rel = f"{attempt_prefix}artifacts"
         exploit_rel = f"{artifacts_rel}/exploit_files"
-        snapshot_rel = f"{artifacts_rel}/snapshot"
 
         if runtime.run_mount_dir is not None:
-            exploit_dir = runtime.run_mount_dir / exploit_rel
-            exploit_dir.mkdir(parents=True, exist_ok=True)
             if exploit_script:
+                exploit_dir = runtime.run_mount_dir / exploit_rel
+                exploit_dir.mkdir(parents=True, exist_ok=True)
                 (exploit_dir / exploit_filename).write_text(exploit_script, encoding="utf-8")
                 exploit_sh = (
                     "#!/bin/bash\n"
@@ -152,7 +142,7 @@ class CVEInjectStrategy(InjectionStrategy):
             trajectory_path=trajectory_path,
         )
 
-        succeeded = bool(patch_diff)
+        succeeded = bool(patch_diff and exploit_script)
         strategy_meta = {"id": self.id, "model_id": request.model_id, "cve_id": cve_id}
         usage = {
             "total_steps": telemetry.total_steps,
@@ -163,11 +153,15 @@ class CVEInjectStrategy(InjectionStrategy):
         }
         paths = {
             "exploit_dir": exploit_rel,
-            "snapshot_manifest": f"{snapshot_rel}/manifest.json",
         }
 
         if not succeeded:
-            failure_msg = "Agent did not produce /tmp/vuln.patch" if not patch_diff else (resp.stderr or resp.stdout or f"exit_status={resp.exit_status}")
+            if not patch_diff:
+                failure_msg = "Agent did not produce /tmp/vuln.patch"
+            elif not exploit_script:
+                failure_msg = f"Agent did not produce {exploit_path}"
+            else:
+                failure_msg = resp.stderr or resp.stdout or f"exit_status={resp.exit_status}"
             logger.warning("[%s] cve_inject FAILED: %s", request.project, failure_msg)
             return InjectionResult(
                 project=request.project,

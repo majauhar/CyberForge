@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 from dotenv import load_dotenv
 
-from utils.paths import selection_run_dir
+from utils.paths import env_file, selection_run_dir
 from vuljector.core import build_runtime, load_project_config
 from vuljector.run_init import run_init
 from vuljector.run_cve_report import run_cve_report
@@ -26,10 +25,7 @@ def _split_csv(value: str | None) -> list[str] | None:
 
 
 def main() -> None:
-    # Load environment variables from src/.env
-    env_file = os.path.join(os.path.dirname(__file__), "..", ".env")
-    if os.path.exists(env_file):
-        load_dotenv(env_file)
+    load_dotenv(env_file())
 
     parser = argparse.ArgumentParser(description="Vuljector V2 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -183,7 +179,6 @@ def _run_convenience(args: argparse.Namespace) -> dict:
         run_setup(args.project)
     selection_payload = run_selection(
         project=args.project,
-        strategy_id=args.selection_strategy_id,
         model_id=args.model_id,
         cwe_groups=_split_csv(args.cwe_groups),
         cwe_ids=_split_csv(args.cwe_ids),
@@ -193,7 +188,6 @@ def _run_convenience(args: argparse.Namespace) -> dict:
     candidates_path = selection_run_dir(args.project, selection_run_id) / "candidates.json"
     return run_injection(
         project=args.project,
-        strategy_id=args.selection_strategy_id,
         model_id=args.model_id,
         candidates_file=str(candidates_path),
         num_vulnerabilities=args.num_vulnerabilities,

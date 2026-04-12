@@ -235,7 +235,7 @@ def _discover_project(
         f' if [ -f "$f" ]; then head -c 3000 "$f"; break; fi; done'
     )
     result = subprocess.run(
-        ["docker", "run", "--rm", runtime.active_image_tag, "bash", "-c", bash_cmd],
+        ["docker", "run", "--rm", runtime.require_ready_image(), "bash", "-c", bash_cmd],
         capture_output=True, text=True, timeout=60,
     )
     if result.returncode != 0:

@@ -57,15 +57,14 @@ def run_agent_task(
 
     docker_env = None
     try:
-        active_image = runtime.active_image_tag
+        active_image = runtime.require_ready_image()
         docker_env = DockerEnvironment(
             image=active_image,
             cwd=request.workdir,
             env=env,
             timeout=120,
         )
-        logging.info("[%s] Container started from %s%s", runtime.project, active_image,
-                     " (ready image)" if active_image != runtime.image_tag else "")
+        logging.info("[%s] Container started from %s (ready image)", runtime.project, active_image)
 
         # ── Pre-agent setup commands (e.g. build.sh) ─────────────────────────
         if not request.setup_commands:
@@ -215,12 +214,8 @@ def _normalize_litellm_model_name(model_id: str) -> str:
 
 
 def _collect_agent_env(request: AgentRequest) -> dict[str, str]:
-    """Merge .env file + host env, bridge RCHAT/Azure shorthand keys."""
-    from utils.paths import src_root
-    file_env = _read_dotenv(src_root() / ".env")
-    merged: dict[str, str] = {}
-    merged.update(file_env)
-    merged.update(dict(os.environ))
+    """Build agent env from host environment, bridging RCHAT/Azure shorthand keys."""
+    merged = dict(os.environ)
 
     # Bridge all Azure endpoint variants to AZURE_API_BASE (what litellm reads).
     azure_endpoint = (
@@ -270,24 +265,3 @@ def _collect_agent_env(request: AgentRequest) -> dict[str, str]:
     if "RCHAT_OSS_API_BASE" in env:
         env.setdefault("PYTHONHTTPSVERIFY", "0")
     return env
-
-
-def _read_dotenv(path: os.PathLike[str] | str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        raw = open(path, "r", encoding="utf-8").read().splitlines()
-    except OSError:
-        return out
-    for line in raw:
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
-            continue
-        key, value = text.split("=", 1)
-        key = key.strip()
-        # Strip inline comments (e.g. "VALUE  # comment") and quotes.
-        if " #" in value:
-            value = value[:value.index(" #")]
-        value = value.strip().strip("'").strip('"')
-        if key:
-            out[key] = value
-    return out

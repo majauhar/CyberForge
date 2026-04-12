@@ -5,7 +5,13 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-PARSER_PATH = "/workspace/run/unit_tests/parse_results.py"
+HARNESS_DIR = "/workspace/run/unit_tests"
+HARNESS_SCRIPT_PATH = f"{HARNESS_DIR}/test.sh"
+PARSER_PATH = f"{HARNESS_DIR}/parse_results.py"
+
+
+def harness_exec_command() -> str:
+    return f"bash {HARNESS_SCRIPT_PATH}"
 
 
 def _templates_dir() -> Path:

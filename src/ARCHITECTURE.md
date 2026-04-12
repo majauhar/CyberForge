@@ -7,14 +7,14 @@ It prioritizes:
 - clear separation of phases
 - explicit JSON contracts between phases
 - reproducible container execution
-- dataset artifacts saved as file snapshots
+- dataset artifacts saved as lean diff-based vulnerability bundles
 
 ## Goals
 
 - Keep the end-to-end flow lightweight and easy to reason about.
 - Decouple vulnerability selection from vulnerability injection.
 - Standardize all inter-step communication with explicit JSON files.
-- Store vulnerabilities as snapshots of modified files with metadata links back to repository paths.
+- Store vulnerabilities as patch-based bundles with a minimal metadata record and the reference exploit.
 - Run agentic logic inside project containers using SWE-agent mini.
 
 ## High-Level Workflow
@@ -30,7 +30,7 @@ Ordering constraint:
 - `setup` must be run first
 - `selection` requires completed setup
 - `injection` requires completed setup and a previously generated `candidates.json`
-- `cve-report` requires a completed injection (vulnerability folder with `patch.diff`, `exploit_files/`, `snapshot/`)
+- `cve-report` requires a completed injection (vulnerability folder with `patch.diff` and `exploit_files/`)
 
 ### Phase 1: Setup
 
@@ -57,24 +57,33 @@ Ordering constraint:
 - Output: JSON file with ranked candidate locations and proposed CWE mappings.
 - Artifact is stored in `runs/selection/` and can be reused for multiple injection runs.
 
+## Image and Container Lifecycle
+
+Vuljector uses one canonical runtime artifact: the ready image.
+
+- `init` may build a local setup image as an intermediate, but only the ready image is used by later phases.
+- If a `dockerhub_image` is configured, setup can pull that ready image directly; otherwise setup builds the ready image locally and bakes the harness at `/workspace/run/unit_tests`.
+- Injection and agent-task runs start fresh containers from the ready image; host run data is mounted under `/workspace/run/attempt` so it does not shadow the baked harness.
+- Verification and CVE report generation use ephemeral ready-image-backed sessions and write results back through the mounted run directory.
+- Vulnerability persistence is diff-based: `patch.diff`, `exploit_files/`, and `vulnerability_metadata.json`.
+
 ### Phase 3: Injection
 
 - Input: one candidate JSON file + desired vulnerability count + injection strategy id + optional debug flag.
-- Reuse prepared container.
-- Run strategy inside container.
+- Reuse the prepared ready image.
+- Run the injection agent in a fresh ephemeral container from that ready image.
+- Verify the patch in a separate ready-image-backed session.
 - Save outputs and logs in `runs/`.
 - Persist dataset artifact:
   - **Without debug**: only on success → `vuljector-projects/<project>/vulnerabilities/`.
-  - **With debug**: always persist snapshots → `vuljector-projects/<project>/debug/success/` on success, `vuljector-projects/<project>/debug/failed/` on failure.
+  - **With debug**: persist successful or failed attempts under `vuljector-projects/<project>/debug/success/` or `debug/failed/`.
 
 ## Container Execution Model
 
 ### What is mounted
 
 Vuljector source is not mounted into the project container.
-Only a per-run output directory is mounted (created empty for that run):
-
-- host `Vuljector/runs/(setup|selection|injection)/<project>/<run_id>/` -> container `/workspace/run/`
+The injection and verification path mounts the per-run attempt directory at `/workspace/run/attempt` so the baked harness at `/workspace/run/unit_tests` stays visible.
 
 Optional mounts can be added per strategy, but the baseline flow keeps this minimal.
 
@@ -97,7 +106,7 @@ Vuljector/
 │       ├── injector/             # injection strategies + interface
 │       ├── selector/             # candidate selection strategies + interface
 │       ├── setup/                # container runtime + lifecycle helpers
-│       ├── verifier/             # verification pipeline (tests, exploit, snapshot)
+│       ├── verifier/             # verification pipeline (tests, exploit, diff bundle)
 │       └── utils/
 │           ├── swe_agent/        # SWE-agent setup and run helper
 │
@@ -138,15 +147,15 @@ Vuljector/src/
 │       └── run.py                  # CVEInjectStrategy: agent re-introduces vulnerability guided by CVE fix diff
 │
 ├── setup/
-│   ├── container_runtime.py        # ContainerRuntime: build, start, exec, copy, .git backup/restore
+│   ├── container_runtime.py        # ContainerRuntime: build, start, exec, copy, ready-image/session helpers
 │   ├── lifecycle.py                # phase setup helpers; base + optional strategy-specific
-│   └── mounts.py                   # mount definitions; defaults to per-run /workspace/run mount
+│   └── mounts.py                   # mount definitions; per-run attempt dir under /workspace/run/attempt
 │
 ├── verifier/
 │   ├── pipeline.py                 # run_verification; orchestrates all checks
-│   ├── unit_tests.py               # runs unit_tests/test.sh; compares count to expected_passing_count
+│   ├── unit_tests.py               # runs unit_tests/test.sh from the baked ready image; compares count to expected_passing_count
 │   ├── exploit.py                  # runs exploit on vulnerable then secure baseline
-│   └── snapshot.py                 # computes changed files; writes snapshot/files + manifest.json
+│   └── (no snapshot module)        # vulnerability persistence is diff-based
 │
 └── utils/
     ├── json_io.py                   # load/save JSON with schema versioning
@@ -233,16 +242,14 @@ Vuljector/src/
 #### `verifier/` (post-injection checks)
 
 - `pipeline.py`:
-  - `run_verification(...)` orchestrates all checks and returns structured verdict.
+  - `run_verification(...)` orchestrates all checks and returns a structured verdict.
 - `unit_tests.py`:
-  - runs optional `vuljector-projects/<project>/unit_tests/test.sh`.
+  - runs optional `vuljector-projects/<project>/unit_tests/test.sh` from the baked ready image.
   - passes if the number of passing tests matches `unit_tests.expected_passing_count`.
 - `exploit.py`:
   - executes exploit on vulnerable code then on secure baseline.
 - `snapshot.py`:
-  - computes changed files and writes:
-    - `snapshot/files/...`
-    - `snapshot/manifest.json`
+  - removed; the dataset now persists `patch.diff` instead of a full file snapshot.
 
 #### `utils/` (shared helpers)
 
@@ -270,8 +277,6 @@ Vuljector/src/
 - `InjectionRequest`
 - `InjectionResult`
 - `VerificationResult`
-- `SnapshotFile`
-- `SnapshotManifest`
 
 Each dataclass supports `to_dict()` / `from_dict()` helpers for stable JSON I/O.
 
@@ -294,10 +299,7 @@ vuljector-projects/
     │       ├── cve_report.json             # CVE JSON 5.0 record; generated after successful injection
     │       ├── exploit_files/
     │       │   └── exploit.sh
-    │       └── snapshot/
-    │           ├── files/
-    │           │   └── ... modified files only ...
-    │           └── manifest.json
+    │       └── patch.diff
     └── debug/                          # only when injection run has debug=true
         ├── success/                    # succeeded injection + verification
         │   └── vulnerability_N/
@@ -334,7 +336,7 @@ Vuljector/runs/
 │           │   └── run.log
 │           └── artifacts/
 │               ├── exploit_files/
-│               └── snapshot/           # staging before dataset persist
+│               └── patch.diff
 │
 └── workspaces/
     └── <project>/
@@ -413,7 +415,7 @@ Notes:
 - `main_repo_url` comes from OSS-Fuzz `project.yaml` (`main_repo`) at `init` time.
 - `language` comes from `scripts/oss_fuzz_full.csv` at `init` time and captures the primary language used for project-aware analysis.
 - `target_dir` is the source location relative to `/src` inside the built image (for example `flask` or `project-parent/tika`).
-- `unit_tests` is optional. If present and `enabled=true`, verifier runs `unit_tests/test.sh`.
+- `unit_tests` is optional. If present and `enabled=true`, verifier runs `unit_tests/test.sh` from the baked ready image.
 - `expected_passing_count` is written during setup when the test script is first run; verification passes if the same count passes after injection.
 
 ### 4) `selection_request.json`
@@ -479,7 +481,7 @@ Path: `runs/injection/<project>/<injection_run_id>/injection_request.json`
 }
 ```
 
-Notes: `debug=true` causes all snapshots (success or failure) to be persisted under `vuljector-projects/<project>/debug/success/` or `debug/failed/`.
+Notes: `debug=true` causes all verified artifacts (success or failure) to be persisted under `vuljector-projects/<project>/debug/success/` or `debug/failed/`.
 
 ### 7) `injection_result.json`
 
@@ -506,7 +508,7 @@ Path: `runs/injection/<project>/<injection_run_id>/injection_result.json`
   },
   "paths": {
     "exploit_dir": "runs/injection/<project>/<run_id>/artifacts/exploit_files",
-    "snapshot_manifest": "runs/injection/<project>/<run_id>/artifacts/snapshot/manifest.json"
+    "patch_diff": "runs/injection/<project>/<run_id>/artifacts/patch.diff"
   },
   "failure": null
 }
@@ -532,31 +534,19 @@ Path: `runs/injection/<project>/<injection_run_id>/verification_result.json`
 }
 ```
 
-## Snapshot Artifact Format
+## Vulnerability Bundle Format
 
-Vulnerabilities are stored as snapshots of modified files.
+Vulnerabilities are stored as lean patch-based bundles.
 
-### Structure
+- `patch.diff` is the canonical code-change artifact.
+- `exploit_files/` stores the reference PoC used by downstream tasks and CVE report generation.
+- `vulnerability_metadata.json` stores the minimal provenance needed to identify the bundle.
 
-- Only modified/added files are saved under `snapshot/files/`.
-- Repository-relative paths are preserved under `snapshot/files/`.
-- `snapshot/manifest.json` maps each snapshot file back to its location in the repository tree.
+### `patch.diff`
 
-`snapshot/manifest.json`:
+Path: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/patch.diff`
 
-```json
-{
-  "project": "flask",
-  "vulnerability_id": "vulnerability_12",
-  "files": [
-    {
-      "repo_path": "src/flask/templating.py",
-      "snapshot_path": "snapshot/files/src/flask/templating.py",
-      "change_type": "modified"
-    }
-  ]
-}
-```
+A standard git unified diff that reproduces the vulnerability when applied to `secure_base_commit`.
 
 ### `vulnerability_metadata.json`
 
@@ -567,23 +557,12 @@ Path: `vuljector-projects/<project>/vulnerabilities/vulnerability_N/vulnerabilit
   "id": "vulnerability_12",
   "project": "flask",
   "cwe_group": "Input Validation",
-  "cwe_id": "79",
+  "cwe_id": "CWE-79",
   "selection_run_id": "<selection_run_id>",
   "injection_run_id": "<injection_run_id>",
-  "snapshot_manifest": "snapshot/manifest.json",
-  "snapshot_links": [
-    {
-      "repo_path": "src/flask/templating.py",
-      "snapshot_path": "snapshot/files/src/flask/templating.py"
-    }
-  ],
-  "exploit_dir": "exploit_files",
-  "secure_base_commit": "<sha>",
-  "complexity": null
+  "secure_base_commit": "<sha>"
 }
 ```
-
-`snapshot_links` explicitly maps each saved file to its location in the original repository tree.
 
 ### `cve_report.json`
 

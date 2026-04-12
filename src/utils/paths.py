@@ -11,6 +11,10 @@ def src_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def env_file() -> Path:
+    return src_root() / ".env"
+
+
 def cwe_categories_csv() -> Path:
     return Path(__file__).resolve().parent / "cwe" / "cwe_categories.csv"
 

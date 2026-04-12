@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import math
@@ -12,24 +11,9 @@ from pathlib import Path
 from setup.container_runtime import ContainerRuntime
 from utils.agent import AgentRequest, run_agent_task
 from utils.agent.prompts import CVE_REPORT_TASK, SECURITY_SYSTEM_TEMPLATE
-from utils.paths import cwe_categories_csv
+from utils.cwe import resolve_cwe_group
 
 logger = logging.getLogger(__name__)
-
-
-def _load_cwe_map() -> dict[str, tuple[str, str]]:
-    """Return {cwe_id: (description, group)} loaded from the approved CWE CSV."""
-    result: dict[str, tuple[str, str]] = {}
-    with cwe_categories_csv().open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            result[f"CWE-{row['CWE#'].strip()}"] = (
-                row["Description"].strip(),
-                row["CWE Group"].strip(),
-            )
-    return result
-
-
-_CWE_MAP: dict[str, tuple[str, str]] = _load_cwe_map()
 
 
 def generate_cve_report(
@@ -66,9 +50,6 @@ def generate_cve_report(
         cost_limit=0.5,
         extract_paths=["/tmp/cve_analysis.json"],
     )
-
-    # Make the approved CWE list available inside the container for validation.
-    runtime.copy_to(cwe_categories_csv(), "/tmp/cwe_categories.csv")
 
     logger.info("[%s] Generating CVE report (model=%s, vuln=%s)", project, model_id, vulnerability_id)
     resp = run_agent_task(runtime, agent_req)
@@ -149,12 +130,13 @@ def _assemble_cve_record(
 
     # Infer group from the approved CWE list based on what the agent selected.
     selected_cwe_id = analysis.get("cwe_id", "")
-    cwe_entry = _CWE_MAP.get(selected_cwe_id)
-    if cwe_entry:
-        cwe_group = cwe_entry[1]
-    else:
-        logger.warning("[%s] cwe_id %r not found in approved list, falling back to intended group", project, selected_cwe_id)
-        cwe_group = intended_cwe_group
+    cwe_group = resolve_cwe_group(selected_cwe_id, fallback=intended_cwe_group)
+    if not cwe_group:
+        logger.warning(
+            "[%s] cwe_id %r not found in approved list, falling back to empty group",
+            project,
+            selected_cwe_id,
+        )
 
     cvss_score, cvss_severity = _cvss31_score(analysis.get("cvss_vector", ""))
 

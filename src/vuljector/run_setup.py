@@ -26,24 +26,8 @@ def run_setup(project: str) -> dict:
     })
 
     runtime = build_runtime(config)
-    runtime.ensure_image()
-
-    if runtime.has_ready_image():
-        logger.info("[%s] Ready image already up-to-date: %s", project, runtime.ready_image_tag)
-    else:
-        logger.info("[%s] Building ready image ...", project)
-        try:
-            runtime.build_ready_image()
-            logger.info("[%s] Ready image built: %s", project, runtime.ready_image_tag)
-        except Exception as exc:
-            logger.warning("[%s] Ready image build failed (non-fatal): %s", project, exc)
-
-    try:
-        logger.info("[%s] Aligning ready image to secure commit %s ...", project, config.secure_base_commit)
-        runtime.sync_ready_image_to_secure_commit()
-        logger.info("[%s] Ready image synced to secure commit.", project)
-    except Exception as exc:
-        logger.warning("[%s] Secure commit sync failed (non-fatal): %s", project, exc)
+    ready_image = runtime.ensure_ready_image(unit_tests_dir=project_root(project) / "unit_tests")
+    logger.info("[%s] Ready image available: %s", project, ready_image)
 
     runtime.mark_setup_completed(True)
 

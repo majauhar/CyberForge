@@ -136,16 +136,17 @@ def _render_test_sh(target_dir: str, rule: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _detect_framework(image_tag: str, target_dir: str) -> dict | None:
-    """Check heuristic rules against the image; return first matching rule."""
+def _detect_framework(runtime, target_dir: str) -> dict | None:
+    """Check heuristic rules against the setup image; return first matching rule."""
     for rule in _HEURISTICS:
         signals = [str(s) for s in rule.get("signals", []) if str(s).strip()]
         if not signals:
             continue
         check = " || ".join(f"[ -f /src/{target_dir}/{s} ]" for s in signals)
-        result = subprocess.run(
-            ["docker", "run", "--rm", image_tag, "bash", "-c", f"if {check}; then echo yes; fi"],
-            capture_output=True, text=True, timeout=30,
+        result = runtime.run_container_command(
+            ["bash", "-c", f"if {check}; then echo yes; fi"],
+            use_setup_image=True,
+            timeout=30,
         )
         if result.stdout.strip() == "yes":
             return rule
@@ -159,7 +160,7 @@ def try_heuristic_harness(*, runtime, project: str, src_dir: str, unit_tests_dir
     """
     from .harness_agent import run_baseline_unit_tests
 
-    rule = _detect_framework(runtime.image_tag, src_dir)
+    rule = _detect_framework(runtime, src_dir)
     if not rule:
         return False
 

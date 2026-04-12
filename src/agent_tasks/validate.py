@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import base64
 import logging
-import subprocess
 from pathlib import Path
 
 from agent_tasks.models import SyntheticTaskSpec, TaskType
@@ -75,9 +73,10 @@ def _validate_poc(
     logger.info("[%s] PoC validation: resetting to secure commit %s", spec.project, spec.secure_base_commit)
     reset_to_secure_commit(runtime, repo_dir=repo_dir, secure_base_commit=spec.secure_base_commit)
 
-    # ── Copy snapshot files to recreate the vulnerable state ─────────────────
-    logger.info("[%s] Installing vulnerable snapshot files", spec.project)
-    _install_snapshot_files(runtime, spec)
+    # ── Apply vulnerable patch and rebuild ───────────────────────────────────
+    logger.info("[%s] Installing vulnerable patch", spec.project)
+    _install_vulnerable_patch(runtime, spec)
+    _rebuild_project(runtime, repo_dir=repo_dir)
 
     # ── Install agent's exploit in the container ──────────────────────────────
     exploit_container_path = "/tmp/agent_attack.py"
@@ -161,9 +160,10 @@ def _validate_patch(
     logger.info("[%s] Patch validation: resetting to secure commit %s", spec.project, spec.secure_base_commit)
     reset_to_secure_commit(runtime, repo_dir=repo_dir, secure_base_commit=spec.secure_base_commit)
 
-    # ── Copy snapshot files to recreate the vulnerable state ─────────────────
-    logger.info("[%s] Installing vulnerable snapshot files", spec.project)
-    _install_snapshot_files(runtime, spec)
+    # ── Apply vulnerable patch and rebuild ───────────────────────────────────
+    logger.info("[%s] Installing vulnerable patch", spec.project)
+    _install_vulnerable_patch(runtime, spec)
+    _rebuild_project(runtime, repo_dir=repo_dir)
 
     # ── Apply agent's fix patch ───────────────────────────────────────────────
     logger.info("[%s] Applying agent's fix patch from %s", spec.project, patch_host_path)
@@ -177,6 +177,7 @@ def _validate_patch(
         )
 
     _apply_patch(runtime, repo_dir=repo_dir, patch_diff=agent_patch, label="agent_fix")
+    _rebuild_project(runtime, repo_dir=repo_dir)
 
     # ── Install reference exploit ─────────────────────────────────────────────
     ref_exploit_container = "/tmp/ref_attack.py"
@@ -220,24 +221,13 @@ def _validate_patch(
 
 # ── Utility helpers ───────────────────────────────────────────────────────────
 
-def _install_snapshot_files(runtime: ContainerRuntime, spec: SyntheticTaskSpec) -> None:
-    """Copy vulnerable snapshot files into the persistent container."""
-    vuln_dir = project_root(spec.project) / "vulnerabilities" / spec.vulnerability_id
-    snapshot_dir = vuln_dir / "snapshot" / "files"
-    if not snapshot_dir.exists():
-        logger.warning("[%s] No snapshot/files found for %s — container remains at secure baseline.", spec.project, spec.vulnerability_id)
+def _install_vulnerable_patch(runtime: ContainerRuntime, spec: SyntheticTaskSpec) -> None:
+    """Apply the stored vulnerable patch in the persistent container."""
+    patch_diff = spec.patch_diff
+    if not patch_diff.strip():
+        logger.warning("[%s] No patch.diff found for %s — container remains at secure baseline.", spec.project, spec.vulnerability_id)
         return
-    for snapshot_file in snapshot_dir.rglob("*"):
-        if not snapshot_file.is_file():
-            continue
-        rel = snapshot_file.relative_to(snapshot_dir)
-        dest = f"{runtime.repo_dir_in_container}/{rel}"
-        content_b64 = base64.b64encode(snapshot_file.read_bytes()).decode()
-        runtime.exec(
-            f"mkdir -p $(dirname '{dest}')"
-            f" && echo '{content_b64}' | base64 -d > '{dest}'"
-        )
-    logger.info("[%s] Snapshot files installed for %s", spec.project, spec.vulnerability_id)
+    _apply_patch(runtime, repo_dir=runtime.repo_dir_in_container, patch_diff=patch_diff, label="vuln")
 
 
 def _apply_patch(
@@ -248,19 +238,15 @@ def _apply_patch(
     label: str = "vuln",
 ) -> None:
     """Write patch_diff into the persistent container and apply it with `patch -p1`."""
-    patch_bytes = (patch_diff if patch_diff.endswith("\n") else patch_diff + "\n").encode()
+    patch_text = patch_diff if patch_diff.endswith("\n") else patch_diff + "\n"
     patch_container_path = f"/tmp/vuljector_{label}.patch"
 
-    result = subprocess.run(
-        ["docker", "exec", "-i", runtime.container_name,
-         "tee", patch_container_path],
-        input=patch_bytes,
-        capture_output=True,
-    )
-    if result.returncode != 0:
+    try:
+        runtime.write_file(patch_container_path, patch_text)
+    except RuntimeError as exc:
         logger.warning(
             "[%s] Failed to write %s patch to container: %s",
-            runtime.project, label, result.stderr.decode()[:200],
+            runtime.project, label, str(exc)[:200],
         )
         return
 
