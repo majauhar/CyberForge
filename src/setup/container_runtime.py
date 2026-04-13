@@ -96,7 +96,9 @@ class DockerSession:
             raise RuntimeError(f"docker cp (from) failed: {(result.stderr or result.stdout).strip()}")
 
     def copy_to(self, host_path: Path, container_path: str) -> None:
-        source = str(host_path / ".") if host_path.is_dir() else str(host_path)
+        # Docker only copies directory contents into an existing destination
+        # directory when the source path literally ends with "/.".
+        source = f"{host_path}/." if host_path.is_dir() else str(host_path)
         result = subprocess.run(
             ["docker", "cp", source, f"{self.container_id}:{container_path}"],
             capture_output=True,

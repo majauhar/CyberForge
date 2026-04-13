@@ -15,7 +15,9 @@ def infer_target_dir(oss_fuzz_project_dir: Path, repo_url: str, default: str) ->
     text = dockerfile.read_text(encoding="utf-8")
     joined = re.sub(r"\\\s*\n", " ", text)
     main_norm = _normalize_repo_url(repo_url)
+    main_base = _repo_basename(repo_url)
     workdirs: list[str] = []
+    basename_clone_targets: list[str] = []
 
     for line in joined.splitlines():
         clone = _parse_git_clone(line)
@@ -25,10 +27,16 @@ def infer_target_dir(oss_fuzz_project_dir: Path, repo_url: str, default: str) ->
                 if dest:
                     return _target_dir_from_dest(dest, default)
                 return _repo_basename(clone_url) or default
+            if dest and _repo_basename(clone_url) == main_base:
+                basename_clone_targets.append(_target_dir_from_dest(dest, default))
 
         workdir = _parse_src_workdir(line)
         if workdir:
             workdirs.append(workdir)
+
+    for target in basename_clone_targets:
+        if target:
+            return target
 
     for workdir in reversed(workdirs):
         target = _target_dir_from_dest(workdir, default="")
