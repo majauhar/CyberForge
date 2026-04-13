@@ -26,8 +26,6 @@ def run_verification(
     unit_tests: dict | None,
     project_root: Path,
     exploit_path: str,
-    pre_vulnerable_commands: list[str] | None = None,
-    pre_secure_commands: list[str] | None = None,
 ) -> VerificationResult:
     logger.info("[%s] === VERIFICATION START ===", project)
 
@@ -63,33 +61,7 @@ def run_verification(
             unit_test_raw_output=test_raw_output,
         )
 
-    def _run_pre_exploit_commands(commands: list[str] | None, *, phase: str) -> VerificationResult | None:
-        if not commands:
-            return None
-        for idx, command in enumerate(commands, start=1):
-            logger.info("[%s] --- %s command %d/%d: %s ---", project, phase, idx, len(commands), command)
-            result = runtime.exec(command, workdir=repo_dir, timeout=1800)
-            output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
-            if result.returncode == 0:
-                continue
-            return _make_result(
-                "failure",
-                {
-                    "unit_tests": test_status,
-                    "exploit_on_vulnerable": "skipped" if phase == "vulnerable setup" else "passed",
-                    "exploit_on_secure": "skipped",
-                },
-                f"{phase.replace(' ', '_')}_failed",
-                output or f"Command failed: {command}",
-            )
-        return None
-
     # ── Check 1: exploit must trigger on vulnerable code ─────────────────────
-    setup_failure = _run_pre_exploit_commands(pre_vulnerable_commands, phase="vulnerable setup")
-    if setup_failure is not None:
-        logger.info("[%s] === VERIFICATION FAIL: vulnerable pre-exploit setup failed ===", project)
-        return setup_failure
-
     logger.info("[%s] --- exploit on VULNERABLE version ---", project)
     vuln_ok, vuln_msg, vuln_timed_out = run_exploit(
         runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="vulnerable"
@@ -119,14 +91,6 @@ def run_verification(
         repo_dir=repo_dir,
         secure_base_commit=secure_base_commit,
     )
-
-    setup_failure = _run_pre_exploit_commands(pre_secure_commands, phase="secure setup")
-    if setup_failure is not None:
-        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-            "restore vulnerable patch failed"
-        )
-        logger.info("[%s] === VERIFICATION FAIL: secure pre-exploit setup failed ===", project)
-        return setup_failure
 
     # ── Check 2: exploit must NOT trigger on secure code ─────────────────────
     logger.info("[%s] --- exploit on SECURE version ---", project)

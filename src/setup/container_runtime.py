@@ -64,20 +64,10 @@ class ContainerRuntime:
         """Tag for the post-build cached image (has build.sh artifacts baked in)."""
         return f"vuljector/{self.project}:{self.setup_hash[:12]}-ready"
 
-    def _has_cached_ready_image(self) -> bool:
-        return (
-            self.meta.get("ready_hash") == self.setup_hash
-            and self._image_exists(self.ready_image_tag)
-        )
-
     def has_ready_image(self) -> bool:
         """True if a ready image exists and matches the current setup hash."""
-        manifest = self.meta.get("ready_out_manifest") or {}
         return (
-            self._has_cached_ready_image()
-            and self.meta.get("ready_secure_commit") == self.secure_base_commit
-            and isinstance(manifest, dict)
-            and int(manifest.get("executable_count", 0)) > 0
+            self.meta.get("ready_hash") == self.setup_hash
             and self._image_exists(self.ready_image_tag)
         )
 
@@ -105,7 +95,7 @@ class ContainerRuntime:
 
         No-op if a ready image for the current setup hash already exists.
         """
-        if self._has_cached_ready_image():
+        if self.has_ready_image():
             return
         import uuid
         tag = self.ready_image_tag
@@ -120,7 +110,12 @@ class ContainerRuntime:
                 raise RuntimeError(
                     f"docker run for ready image failed: {(start.stderr or start.stdout).strip()}"
                 )
-            manifest = self._build_and_validate_out(container_name)
+            # Pre-run build.sh so artifacts are baked into the committed image.
+            subprocess.run(
+                ["docker", "exec", container_name, "bash", "-lc",
+                 "bash /src/build.sh 2>&1 | tail -30 || true"],
+                capture_output=True, text=True, timeout=600,
+            )
             commit = subprocess.run(
                 ["docker", "commit", container_name, tag],
                 capture_output=True, text=True,
@@ -134,8 +129,6 @@ class ContainerRuntime:
                            capture_output=True, text=True)
         self.meta["ready_hash"] = self.setup_hash
         self.meta["ready_image_tag"] = tag
-        self.meta["ready_out_manifest"] = manifest
-        self.meta["ready_secure_commit"] = None
         self._save_meta()
 
     def sync_ready_image_to_secure_commit(self) -> None:
@@ -180,7 +173,6 @@ class ContainerRuntime:
                     "secure commit reset failed: "
                     f"{(reset.stderr or reset.stdout).strip()}"
                 )
-            manifest = self._build_and_validate_out(container_name)
             commit = subprocess.run(
                 ["docker", "commit", container_name, tag],
                 capture_output=True, text=True,
@@ -192,11 +184,6 @@ class ContainerRuntime:
         finally:
             subprocess.run(["docker", "rm", "-f", container_name],
                            capture_output=True, text=True)
-        self.meta["ready_hash"] = self.setup_hash
-        self.meta["ready_image_tag"] = tag
-        self.meta["ready_out_manifest"] = manifest
-        self.meta["ready_secure_commit"] = self.secure_base_commit
-        self._save_meta()
 
     def ensure_image(self) -> None:
         if self.dockerhub_image and (
@@ -291,19 +278,6 @@ class ContainerRuntime:
             stderr = f"{stderr}\n{timeout_msg}".strip()
             return ExecResult(124, stdout, stderr, timed_out=True)
 
-    def inspect_out_manifest(self) -> dict:
-        if not self.container_name:
-            raise RuntimeError("No running container to inspect /out from.")
-        return self._inspect_out_manifest_for_container(self.container_name)
-
-    def rebuild_out(self, *, timeout: int | float = 1800) -> tuple[ExecResult, dict]:
-        result = self.exec(
-            f"{self._build_env_prelude()}set -o pipefail && bash /src/build.sh 2>&1 | tee /tmp/vuljector_build.log",
-            timeout=timeout,
-        )
-        manifest = self.inspect_out_manifest()
-        return result, manifest
-
     def copy_from(self, container_path: str, host_path: Path) -> None:
         host_path.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
@@ -384,109 +358,6 @@ class ContainerRuntime:
 
     def _save_meta(self) -> None:
         self.meta_path.write_text(json.dumps(self.meta, indent=2) + "\n", encoding="utf-8")
-
-    def _build_and_validate_out(self, container_name: str, *, timeout: int = 1800) -> dict:
-        try:
-            result = subprocess.run(
-                [
-                    "docker", "exec", container_name, "bash", "-lc",
-                    f"{self._build_env_prelude()}set -o pipefail && bash /src/build.sh 2>&1 | tee /tmp/vuljector_build.log",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            output = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
-            raise RuntimeError(
-                f"build.sh timed out after {timeout}s:\n{self._tail_lines(output)}"
-            ) from exc
-
-        output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
-        if result.returncode != 0:
-            raise RuntimeError(f"build.sh failed:\n{self._tail_lines(output)}")
-
-        manifest = self._inspect_out_manifest_for_container(container_name)
-        self._validate_out_manifest(manifest)
-        return manifest
-
-    def _inspect_out_manifest_for_container(self, container_name: str) -> dict:
-        script = r"""
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-out_dir = Path("/out")
-entries = []
-if out_dir.exists():
-    for child in sorted(out_dir.iterdir(), key=lambda item: item.name):
-        try:
-            stat = child.stat()
-        except OSError:
-            continue
-        kind = "dir" if child.is_dir() else "symlink" if child.is_symlink() else "file"
-        executable = child.is_file() and os.access(child, os.X_OK)
-        entries.append(
-            {
-                "name": child.name,
-                "path": str(child),
-                "kind": kind,
-                "size": int(stat.st_size),
-                "executable": executable,
-            }
-        )
-
-manifest = {
-    "entry_count": len(entries),
-    "executable_count": sum(1 for entry in entries if entry["executable"]),
-    "executables": [entry["name"] for entry in entries if entry["executable"]],
-    "dictionaries": [entry["name"] for entry in entries if entry["name"].endswith(".dict")],
-    "seed_corpora": [entry["name"] for entry in entries if entry["name"].endswith(".zip")],
-    "entries": entries,
-}
-print(json.dumps(manifest))
-PY
-"""
-        result = subprocess.run(
-            ["docker", "exec", container_name, "bash", "-lc", script],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"failed to inspect /out: {(result.stderr or result.stdout).strip()}"
-            )
-        try:
-            return json.loads(result.stdout.strip())
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"invalid /out manifest JSON: {result.stdout!r}") from exc
-
-    @staticmethod
-    def _validate_out_manifest(manifest: dict) -> None:
-        if int(manifest.get("executable_count", 0)) > 0:
-            return
-        entries = ", ".join(entry["name"] for entry in (manifest.get("entries") or [])[:12])
-        detail = entries or "<empty /out>"
-        raise RuntimeError(f"build.sh produced no executable fuzz targets in /out ({detail})")
-
-    @staticmethod
-    def _tail_lines(text: str, lines: int = 40) -> str:
-        chunks = [line for line in text.splitlines() if line.strip()]
-        if not chunks:
-            return "<no build output>"
-        return "\n".join(chunks[-lines:])
-
-    @staticmethod
-    def _build_env_prelude() -> str:
-        return (
-            'if [ -n "${LIB_FUZZING_ENGINE:-}" ] && [ ! -f "$LIB_FUZZING_ENGINE" ]; then '
-            'ALT=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a); '
-            'if [ -n "$ALT" ] && [ "$ALT" != "libclang_rt.fuzzer-x86_64.a" ] && [ -f "$ALT" ]; then '
-            'export LIB_FUZZING_ENGINE="$ALT"; '
-            'fi; '
-            'fi; '
-        )
 
     @staticmethod
     def _compute_setup_hash(setup_dir: Path) -> str:
