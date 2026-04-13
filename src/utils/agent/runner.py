@@ -14,6 +14,8 @@ from .models import AgentRequest, AgentResponse
 def run_agent_task(
     runtime: ContainerRuntime,
     request: AgentRequest,
+    *,
+    allow_setup_image: bool = False,
 ) -> AgentResponse:
     """
     Run mini-swe-agent in a fresh container from the project image.
@@ -24,6 +26,9 @@ def run_agent_task(
       - post_commands run first (can normalise files, e.g. git diff HEAD)
       - Files are extracted via docker exec cat after post_commands
       - Container is destroyed when docker_env.close() is called
+
+    By default the agent requires the project's ready image. `allow_setup_image`
+    is only for init-time harness discovery before setup has produced a ready image.
     """
     env = _collect_agent_env(request)
     # Apply collected env to host process so litellm can see Azure/API keys.
@@ -57,14 +62,15 @@ def run_agent_task(
 
     docker_env = None
     try:
-        active_image = runtime.require_ready_image()
+        active_image = runtime.resolve_agent_image(allow_setup_image=allow_setup_image)
         docker_env = DockerEnvironment(
             image=active_image,
             cwd=request.workdir,
             env=env,
             timeout=120,
         )
-        logging.info("[%s] Container started from %s (ready image)", runtime.project, active_image)
+        image_kind = "setup image" if allow_setup_image else "ready image"
+        logging.info("[%s] Container started from %s (%s)", runtime.project, active_image, image_kind)
 
         # ── Pre-agent setup commands (e.g. build.sh) ─────────────────────────
         if not request.setup_commands:

@@ -75,9 +75,7 @@ class LLMExploreStrategy(SelectionStrategy):
             pool_size = allocation[role_name]
             logging.info("[%s] llm_explore: specialist '%s' (pool=%d)", project, role_name, pool_size)
 
-            setup_cmds = runtime.pre_agent_setup_commands(
-                "bash /src/build.sh 2>&1 | tail -20 || true"
-            ) + [
+            setup_cmds = [
                 _runtime_files_mount_command(runtime_files),
                 _cwe_mount_command(role["cwe_groups"]),
             ]

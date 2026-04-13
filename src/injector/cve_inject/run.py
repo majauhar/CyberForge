@@ -55,7 +55,7 @@ class CVEInjectStrategy(InjectionStrategy):
         fix_diff = extra.get("fix_diff", "")
         cwes_str = ", ".join(cwes_list) or "unknown"
 
-        setup_commands = runtime.pre_agent_setup_commands("bash /src/build.sh 2>&1 | tail -30 || true")
+        setup_commands: list[str] = []
         harness_available = (project_root(request.project) / "unit_tests" / "test.sh").exists()
 
         lang_ctx = _get_language_context(

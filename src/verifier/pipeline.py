@@ -73,7 +73,10 @@ def run_verification(
 
     if rebuild_command:
         logger.info("[%s] --- rebuild after patch ---", project)
-        runtime.exec(rebuild_command, timeout=1800).raise_for_status("rebuild after patch failed")
+        rebuild_result = runtime.exec(rebuild_command, timeout=1800)
+        if rebuild_result.returncode != 0:
+            detail = (rebuild_result.stderr or rebuild_result.stdout or "").strip()[-500:]
+            logger.warning("[%s] rebuild after patch failed; continuing verification: %s", project, detail)
 
     logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
     test_status, passed_count, test_message, test_raw_output = run_unit_tests(

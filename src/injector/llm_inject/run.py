@@ -225,7 +225,7 @@ class LLMInjectStrategy(InjectionStrategy):
         injection_hint = candidate.location_hint or extra.get("injection_hint", "")
 
         # ── Setup commands ────────────────────────────────────────────────────
-        setup_commands = runtime.pre_agent_setup_commands("bash /src/build.sh 2>&1 | tail -30 || true")
+        setup_commands: list[str] = []
         harness_available = (project_root(request.project) / "unit_tests" / "test.sh").exists()
 
         # ── Language context (syntax check + exploit template) ────────────────

@@ -96,7 +96,7 @@ def try_agent_harness(
         trajectory_path=trajectory_path,
     )
 
-    resp = run_agent_task(runtime, agent_req)
+    resp = run_agent_task(runtime, agent_req, allow_setup_image=True)
     harness_script = resp.extracted_files.get("/tmp/test_harness.sh", "").strip()
 
     if not harness_script:

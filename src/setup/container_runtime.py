@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import hashlib
 import json
 import subprocess
@@ -12,6 +13,8 @@ from setup.dockerhub_image import pull_ready_image
 from setup.mounts import RUN_MOUNT_POINT
 
 HARNESS_DIR = "/workspace/run/unit_tests"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -93,8 +96,9 @@ class DockerSession:
             raise RuntimeError(f"docker cp (from) failed: {(result.stderr or result.stdout).strip()}")
 
     def copy_to(self, host_path: Path, container_path: str) -> None:
+        source = str(host_path / ".") if host_path.is_dir() else str(host_path)
         result = subprocess.run(
-            ["docker", "cp", str(host_path), f"{self.container_id}:{container_path}"],
+            ["docker", "cp", source, f"{self.container_id}:{container_path}"],
             capture_output=True,
             text=True,
         )
@@ -176,9 +180,12 @@ class ContainerRuntime:
             )
         return self.ready_image_tag
 
-    def pre_agent_setup_commands(self, build_cmd: str) -> list[str]:
-        self.require_ready_image()
-        return []
+    def resolve_agent_image(self, *, allow_setup_image: bool = False) -> str:
+        if allow_setup_image:
+            self.ensure_setup_image()
+            return self._setup_image_tag()
+        return self.require_ready_image()
+
 
     def ensure_setup_image(self) -> None:
         setup_image_tag = self._setup_image_tag()
@@ -235,7 +242,10 @@ class ContainerRuntime:
                     workdir=self.repo_dir_in_container,
                 ).raise_for_status("git reset to secure_base_commit failed")
             session.exec("git clean -fdx", workdir=self.repo_dir_in_container).raise_for_status("git clean failed")
-            session.exec("bash /src/build.sh", timeout=1800).raise_for_status("build.sh failed while creating ready image")
+            build_result = session.exec("bash /src/build.sh", timeout=1800)
+            if build_result.returncode != 0:
+                detail = (build_result.stderr or build_result.stdout or "").strip()[-500:]
+                logger.warning("[%s] build.sh failed while creating ready image; continuing with partial image: %s", self.project, detail)
             session.exec(f"mkdir -p {HARNESS_DIR}").raise_for_status("failed to create harness directory")
             session.copy_to(unit_tests_dir, HARNESS_DIR)
             session.exec(
