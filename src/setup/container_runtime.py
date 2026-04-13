@@ -298,7 +298,8 @@ class ContainerRuntime:
 
     def rebuild_out(self, *, timeout: int | float = 1800) -> tuple[ExecResult, dict]:
         result = self.exec(
-            f"{self._build_env_prelude()}set -o pipefail && bash /src/build.sh 2>&1 | tee /tmp/vuljector_build.log",
+            "compile 2>&1 | tee /tmp/vuljector_build.log",
+            env={"FUZZING_LANGUAGE": self.language or "c++"},
             timeout=timeout,
         )
         manifest = self.inspect_out_manifest()
@@ -386,11 +387,17 @@ class ContainerRuntime:
         self.meta_path.write_text(json.dumps(self.meta, indent=2) + "\n", encoding="utf-8")
 
     def _build_and_validate_out(self, container_name: str, *, timeout: int = 1800) -> dict:
+        # Pass FUZZING_LANGUAGE so the OSS-Fuzz compile script doesn't abort on
+        # an unbound variable. The image already has SANITIZER/FUZZING_ENGINE/
+        # ARCHITECTURE set; we only need to supply the language.
+        fuzzing_language = self.language or "c++"
         try:
             result = subprocess.run(
                 [
-                    "docker", "exec", container_name, "bash", "-lc",
-                    f"{self._build_env_prelude()}set -o pipefail && bash /src/build.sh 2>&1 | tee /tmp/vuljector_build.log",
+                    "docker", "exec",
+                    "-e", f"FUZZING_LANGUAGE={fuzzing_language}",
+                    container_name, "bash", "-lc",
+                    "compile 2>&1 | tee /tmp/vuljector_build.log",
                 ],
                 capture_output=True,
                 text=True,
@@ -399,12 +406,12 @@ class ContainerRuntime:
         except subprocess.TimeoutExpired as exc:
             output = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
             raise RuntimeError(
-                f"build.sh timed out after {timeout}s:\n{self._tail_lines(output)}"
+                f"compile timed out after {timeout}s:\n{self._tail_lines(output)}"
             ) from exc
 
         output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
         if result.returncode != 0:
-            raise RuntimeError(f"build.sh failed:\n{self._tail_lines(output)}")
+            raise RuntimeError(f"compile failed:\n{self._tail_lines(output)}")
 
         manifest = self._inspect_out_manifest_for_container(container_name)
         self._validate_out_manifest(manifest)
@@ -476,17 +483,6 @@ PY
         if not chunks:
             return "<no build output>"
         return "\n".join(chunks[-lines:])
-
-    @staticmethod
-    def _build_env_prelude() -> str:
-        return (
-            'if [ -n "${LIB_FUZZING_ENGINE:-}" ] && [ ! -f "$LIB_FUZZING_ENGINE" ]; then '
-            'ALT=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a); '
-            'if [ -n "$ALT" ] && [ "$ALT" != "libclang_rt.fuzzer-x86_64.a" ] && [ -f "$ALT" ]; then '
-            'export LIB_FUZZING_ENGINE="$ALT"; '
-            'fi; '
-            'fi; '
-        )
 
     @staticmethod
     def _compute_setup_hash(setup_dir: Path) -> str:
