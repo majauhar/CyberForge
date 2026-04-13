@@ -2,6 +2,7 @@
 name = "vuljector"
 version = "0.2.0"
 description = "Structural vulnerability injection for synthetic security dataset creation"
+readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.3.1",
