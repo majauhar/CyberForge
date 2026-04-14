@@ -70,70 +70,29 @@ def run_agent_on_task(
 
 def _build_setup_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) -> list[str]:
     """Build the list of setup_commands to run before the agent starts."""
-    cmds: list[str] = [
-        "bash /src/build.sh 2>&1 | tail -20 || true",
-    ]
-
-    # Copy snapshot files to put the container in the vulnerable state.
-    vuln_dir = project_root(spec.project) / "vulnerabilities" / spec.vulnerability_id
-    snapshot_dir = vuln_dir / "snapshot" / "files"
-    if snapshot_dir.exists():
-        for snapshot_file in snapshot_dir.rglob("*"):
-            if not snapshot_file.is_file():
-                continue
-            rel = snapshot_file.relative_to(snapshot_dir)
-            dest = f"{runtime.repo_dir_in_container}/{rel}"
-            content_b64 = base64.b64encode(
-                snapshot_file.read_bytes()
-            ).decode()
-            cmds.append(
-                f"mkdir -p $(dirname '{dest}')"
-                f" && echo '{content_b64}' | base64 -d > '{dest}'"
-                f" && echo 'Installed vulnerable {rel} OK'"
-            )
-    else:
-        logger.warning(
-            "[%s] No snapshot/files found for %s — agent will run on clean source.",
-            spec.project, spec.vulnerability_id,
-        )
-
-    # Reinitialize git with vulnerable state as baseline — strips history so the
-    # agent cannot cheat via git log/diff, while keeping git available for
-    # secure_patch's post_command (git diff HEAD).
     repo = runtime.repo_dir_in_container
-    cmds.append(
-        f"rm -rf {repo}/.git"
-        f" && git init {repo}"
+    patch_b64 = base64.b64encode(spec.patch_diff.encode("utf-8")).decode()
+    cmds: list[str] = [
+        f"cd {repo} && git reset --hard {spec.secure_base_commit} && git clean -fdx",
+        f"echo '{patch_b64}' | base64 -d > /tmp/vuln.patch && cd {repo} && git apply /tmp/vuln.patch",
+        "bash /src/build.sh 2>&1 | tail -20 || true",
+        f"rm -rf {repo}/.git && git init {repo}"
         f" && git -C {repo} add -A"
         f" && git -C {repo} -c user.email=vuljector@local -c user.name=vuljector"
         f" commit -m baseline --allow-empty-message 2>&1 | tail -3"
-        f" && echo 'Git baseline committed OK'"
-    )
+        f" && echo 'Git baseline committed OK'",
+    ]
 
-    # For secure_patch: also install the reference exploit and test harness.
-    if spec.task_type == TaskType.SECURE_PATCH:
-        # Reference exploit — agent uses this to verify their fix works.
-        if spec.reference_exploit_path.exists():
-            exploit_b64 = base64.b64encode(
-                spec.reference_exploit_path.read_bytes()
-            ).decode()
-            cmds.append(
-                f"echo '{exploit_b64}' | base64 -d > /tmp/ref_attack.py"
-                " && chmod +x /tmp/ref_attack.py"
-                " && echo 'Reference exploit installed OK'"
-            )
-
-        # Test harness.
-        harness_path = project_root(spec.project) / "unit_tests" / "test.sh"
-        if harness_path.exists():
-            harness_b64 = base64.b64encode(
-                harness_path.read_text(encoding="utf-8").encode()
-            ).decode()
-            cmds.append(
-                f"echo '{harness_b64}' | base64 -d > /tmp/test_harness.sh"
-                " && chmod +x /tmp/test_harness.sh"
-                " && echo 'Test harness installed OK'"
-            )
+    # For secure_patch: install the reference exploit so the agent can verify its fix.
+    if spec.task_type == TaskType.SECURE_PATCH and spec.reference_exploit_path.exists():
+        exploit_b64 = base64.b64encode(
+            spec.reference_exploit_path.read_bytes()
+        ).decode()
+        cmds.append(
+            f"echo '{exploit_b64}' | base64 -d > /tmp/ref_attack.py"
+            " && chmod +x /tmp/ref_attack.py"
+            " && echo 'Reference exploit installed OK'"
+        )
 
     return cmds
 

@@ -42,7 +42,7 @@ class SyntheticTaskSpec:
     secure_base_commit: str
     cwe_id: str
     cwe_group: str
-    # From snapshot/manifest.json
+    # Derived from patch.diff
     affected_files: list[str]
     # Patch diff (git format) that introduces the vulnerability
     patch_diff: str

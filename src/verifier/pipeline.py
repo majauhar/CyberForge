@@ -1,12 +1,10 @@
-"""Verification pipeline for V2 workflow."""
+"""Verification pipeline for ready-image-backed ephemeral sessions."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from setup.container_runtime import ContainerRuntime
-from utils.github_utils import reset_to_secure_commit
 from vuljector.io_contracts import VerificationResult, utc_now_iso
 
 from .exploit import run_exploit
@@ -17,37 +15,19 @@ logger = logging.getLogger(__name__)
 
 def run_verification(
     *,
-    runtime: ContainerRuntime,
+    runtime,
     project: str,
     run_id: str,
     repo_dir: str,
-    secure_base_commit: str,
-    git_backup_dir: Path,  # kept for call-site compatibility, unused
+    patch_diff: str,
     unit_tests: dict | None,
     project_root: Path,
     exploit_path: str,
+    rebuild_command: str | None = None,
 ) -> VerificationResult:
     logger.info("[%s] === VERIFICATION START ===", project)
 
-    # .git is always present in the container (baked into the OSS-Fuzz image).
-    runtime.exec("git diff --binary > /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-        "snapshot patch generation failed"
-    )
-
-    # ── Unit tests (informational only — never aborts pipeline) ──────────────
-    logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
-    test_status, passed_count, test_message, test_raw_output = run_unit_tests(
-        runtime,
-        repo_dir=repo_dir,
-        unit_tests=unit_tests,
-        project_root=project_root,
-    )
-    logger.info(
-        "[%s] unit_tests: status=%s passed=%s message=%s\n--- test output ---\n%s\n--- end ---",
-        project, test_status, passed_count, test_message, (test_raw_output or "")[:3000],
-    )
-
-    def _make_result(status, checks, failure_cause, failure_message) -> VerificationResult:
+    def _make_result(status, checks, failure_cause, failure_message, passed_count, test_message, test_raw_output):
         return VerificationResult(
             project=project,
             run_id=run_id,
@@ -61,73 +41,94 @@ def run_verification(
             unit_test_raw_output=test_raw_output,
         )
 
-    # ── Check 1: exploit must trigger on vulnerable code ─────────────────────
-    logger.info("[%s] --- exploit on VULNERABLE version ---", project)
-    vuln_ok, vuln_msg, vuln_timed_out = run_exploit(
-        runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="vulnerable"
-    )
-    if vuln_timed_out:
-        logger.info("[%s] === VERIFICATION FAIL: exploit timed out on vulnerable ===", project)
-        return _make_result(
-            "failure",
-            {"unit_tests": test_status, "exploit_on_vulnerable": "timed_out", "exploit_on_secure": "skipped"},
-            "exploit_timed_out_on_vulnerable",
-            vuln_msg,
-        )
-    logger.info("[%s] exploit_on_vulnerable: triggered=%s", project, vuln_ok)
-    if not vuln_ok:
-        logger.info("[%s] === VERIFICATION FAIL: exploit did not trigger on vulnerable ===", project)
-        return _make_result(
-            "failure",
-            {"unit_tests": test_status, "exploit_on_vulnerable": "failed", "exploit_on_secure": "skipped"},
-            "exploit_failed_on_vulnerable",
-            vuln_msg,
-        )
-
-    # ── Reset to secure commit ────────────────────────────────────────────────
-    logger.info("[%s] --- resetting to secure commit: %s ---", project, secure_base_commit)
-    reset_to_secure_commit(
-        runtime,
-        repo_dir=repo_dir,
-        secure_base_commit=secure_base_commit,
-    )
-
-    # ── Check 2: exploit must NOT trigger on secure code ─────────────────────
     logger.info("[%s] --- exploit on SECURE version ---", project)
     secure_ok, secure_msg, secure_timed_out = run_exploit(
-        runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="secure"
+        runtime,
+        repo_dir=repo_dir,
+        exploit_path=exploit_path,
+        label="secure",
     )
     if secure_timed_out:
-        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-            "restore vulnerable patch failed"
-        )
-        logger.info("[%s] === VERIFICATION FAIL: exploit timed out on secure ===", project)
         return _make_result(
             "failure",
-            {"unit_tests": test_status, "exploit_on_vulnerable": "passed", "exploit_on_secure": "timed_out"},
+            {"unit_tests": "skipped", "exploit_on_vulnerable": "skipped", "exploit_on_secure": "timed_out"},
             "exploit_timed_out_on_secure",
             secure_msg,
+            None,
+            "",
+            "",
         )
-    logger.info("[%s] exploit_on_secure: triggered=%s", project, secure_ok)
-
-    # Re-apply the vulnerability for snapshot generation.
-    runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-        "restore vulnerable patch failed"
-    )
-
     if secure_ok:
-        logger.info("[%s] === VERIFICATION FAIL: exploit triggers on secure version too ===", project)
         return _make_result(
             "failure",
-            {"unit_tests": test_status, "exploit_on_vulnerable": "passed", "exploit_on_secure": "failed"},
-            "exploit_succeeds_on_both",
+            {"unit_tests": "skipped", "exploit_on_vulnerable": "skipped", "exploit_on_secure": "failed"},
+            "exploit_succeeds_on_secure",
             secure_msg or "Exploit succeeded on secure code.",
+            None,
+            "",
+            "",
         )
 
-    logger.info("[%s] === VERIFICATION SUCCESS ===", project)
+    _apply_patch(runtime, repo_dir=repo_dir, patch_diff=patch_diff)
+
+    if rebuild_command:
+        logger.info("[%s] --- rebuild after patch ---", project)
+        rebuild_result = runtime.exec(rebuild_command, timeout=1800)
+        if rebuild_result.returncode != 0:
+            detail = (rebuild_result.stderr or rebuild_result.stdout or "").strip()[-500:]
+            logger.warning("[%s] rebuild after patch failed; continuing verification: %s", project, detail)
+
+    logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
+    test_status, passed_count, test_message, test_raw_output = run_unit_tests(
+        runtime,
+        repo_dir=repo_dir,
+        unit_tests=unit_tests,
+        project_root=project_root,
+    )
+
+    logger.info("[%s] --- exploit on VULNERABLE version ---", project)
+    vuln_ok, vuln_msg, vuln_timed_out = run_exploit(
+        runtime,
+        repo_dir=repo_dir,
+        exploit_path=exploit_path,
+        label="vulnerable",
+    )
+    if vuln_timed_out:
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "timed_out", "exploit_on_secure": "passed"},
+            "exploit_timed_out_on_vulnerable",
+            vuln_msg,
+            passed_count,
+            test_message,
+            test_raw_output,
+        )
+    if not vuln_ok:
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "failed", "exploit_on_secure": "passed"},
+            "exploit_failed_on_vulnerable",
+            vuln_msg,
+            passed_count,
+            test_message,
+            test_raw_output,
+        )
+
     return _make_result(
         "success",
         {"unit_tests": test_status, "exploit_on_vulnerable": "passed", "exploit_on_secure": "passed"},
         None,
         "",
+        passed_count,
+        test_message,
+        test_raw_output,
     )
+
+
+def _apply_patch(runtime, *, repo_dir: str, patch_diff: str) -> None:
+    patch_text = patch_diff if patch_diff.endswith("\n") else patch_diff + "\n"
+    runtime.write_file("/tmp/vuljector_apply.patch", patch_text)
+    runtime.exec(
+        "patch -p1 --fuzz=3 < /tmp/vuljector_apply.patch",
+        workdir=repo_dir,
+    ).raise_for_status("patch apply failed")

@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from agent_tasks.models import SyntheticTaskSpec, TaskType
+from utils.cwe import resolve_cwe_group
 from utils.paths import project_root
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def load_vulnerability(
     Expected layout:
       vuljector-projects/<project>/vulnerabilities/<vulnerability_id>/
         vulnerability_metadata.json
-        snapshot/manifest.json
+        patch.diff
         exploit_files/attack.py
     """
     vuln_dir = project_root(project) / "vulnerabilities" / vulnerability_id
@@ -38,23 +39,19 @@ def load_vulnerability(
     if not metadata:
         raise FileNotFoundError(f"vulnerability_metadata.json missing in {vuln_dir}")
 
-    manifest = _load_json(vuln_dir / "snapshot" / "manifest.json")
-    if not manifest:
-        raise FileNotFoundError(f"snapshot/manifest.json missing in {vuln_dir}")
+    patch_diff = _load_text(vuln_dir / "patch.diff")
+    if patch_diff is None:
+        raise FileNotFoundError(f"patch.diff missing in {vuln_dir}")
 
     reference_exploit = vuln_dir / "exploit_files" / "attack.py"
     if not reference_exploit.exists():
         raise FileNotFoundError(f"Reference exploit not found: {reference_exploit}")
 
     cwe_id = metadata.get("cwe_id", "CWE-UNKNOWN")
-    cwe_group = metadata.get("cwe_group", "Unknown")
+    cwe_group = resolve_cwe_group(cwe_id, fallback=metadata.get("cwe_group", "Unknown"))
     secure_base_commit = metadata.get("secure_base_commit", "")
 
-    affected_files = [
-        f["repo_path"]
-        for f in manifest.get("files", [])
-        if f.get("change_type") in ("modified", "added", None)
-    ]
+    affected_files = _affected_files_from_patch(patch_diff)
 
     vuln_description = _make_vuln_description(
         project=project,
@@ -72,7 +69,7 @@ def load_vulnerability(
         cwe_id=cwe_id,
         cwe_group=cwe_group,
         affected_files=affected_files,
-        patch_diff="",
+        patch_diff=patch_diff,
         reference_exploit_path=reference_exploit,
         vuln_description=vuln_description,
     )
@@ -105,3 +102,31 @@ def _load_json(path: Path) -> dict | None:
     except Exception as exc:
         logger.warning("Failed to parse %s: %s", path, exc)
         return None
+
+
+def _load_text(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to read %s: %s", path, exc)
+        return None
+
+
+def _affected_files_from_patch(patch_diff: str) -> list[str]:
+    files: list[str] = []
+    seen: set[str] = set()
+    for line in patch_diff.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        repo_path = parts[3]
+        if repo_path.startswith("b/"):
+            repo_path = repo_path[2:]
+        if repo_path and repo_path not in seen:
+            seen.add(repo_path)
+            files.append(repo_path)
+    return files

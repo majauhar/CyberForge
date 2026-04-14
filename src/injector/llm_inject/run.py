@@ -22,7 +22,6 @@ For candidates from llm_explore, these extra fields may be absent; graceful fall
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from injector.base import InjectionRequest, InjectionStrategy
@@ -226,7 +225,7 @@ class LLMInjectStrategy(InjectionStrategy):
         injection_hint = candidate.location_hint or extra.get("injection_hint", "")
 
         # ── Setup commands ────────────────────────────────────────────────────
-        setup_commands = runtime.pre_agent_setup_commands("bash /src/build.sh 2>&1 | tail -30 || true")
+        setup_commands: list[str] = []
         harness_available = (project_root(request.project) / "unit_tests" / "test.sh").exists()
 
         # ── Language context (syntax check + exploit template) ────────────────
@@ -276,15 +275,7 @@ class LLMInjectStrategy(InjectionStrategy):
         post_commands: list[str] = [
             f"cd {runtime.repo_dir_in_container} && git diff HEAD > /tmp/vuln.patch || true"
         ]
-        if harness_available:
-            post_commands.append(
-                "bash /workspace/run/unit_tests/test.sh > /tmp/harness_out.txt 2>&1"
-                "; echo HARNESS_EXIT:$?; tail -20 /tmp/harness_out.txt"
-            )
-        post_commands.append(
-            f"{lang_ctx['post_run_cmd']} > /tmp/attack_out.txt 2>&1"
-            "; echo ATTACK_EXIT:$?; tail -30 /tmp/attack_out.txt"
-        )
+
 
         # ── Trajectory path (inside the run mount on host) ────────────────────
         traj_name = f"{request.attempt_dir}_trajectory.json" if request.attempt_dir else "vuln_inject_trajectory.json"
@@ -321,23 +312,19 @@ class LLMInjectStrategy(InjectionStrategy):
         patch_diff = resp.extracted_files.get("/tmp/vuln.patch", "")
         exploit_script = resp.extracted_files.get(exploit_path, "").strip()
 
-        harness_passed, attack_triggered = _parse_post_results(resp.post_results)
+        harness_passed, attack_triggered = False, False
 
-        # ── Write artifacts to run mount (host-side run_mount_dir maps to /workspace/run/) ──
+        # ── Write artifacts to the host run directory (mounted at /workspace/run/attempt) ──
         # Artifacts go into the per-attempt subdirectory when attempt_dir is set.
         attempt_prefix = request.attempt_dir + "/" if request.attempt_dir else ""
         artifacts_rel = f"{attempt_prefix}artifacts"
         exploit_rel = f"{artifacts_rel}/exploit_files"
-        snapshot_rel = f"{artifacts_rel}/snapshot"
 
         if runtime.run_mount_dir is not None:
-            exploit_dir = runtime.run_mount_dir / exploit_rel
-            exploit_dir.mkdir(parents=True, exist_ok=True)
             if exploit_script:
+                exploit_dir = runtime.run_mount_dir / exploit_rel
+                exploit_dir.mkdir(parents=True, exist_ok=True)
                 (exploit_dir / exploit_filename).write_text(exploit_script, encoding="utf-8")
-                # exploit.sh is a thin wrapper — passes through the exploit's exit code.
-                # Convention: exploit exits non-zero when triggered.
-                # verifier treats non-zero as triggered=True — consistent.
                 exploit_sh = (
                     "#!/bin/bash\n"
                     f"cd /src/{request.project}\n"
@@ -358,13 +345,14 @@ class LLMInjectStrategy(InjectionStrategy):
             trajectory_path=trajectory_path,
         )
 
-        # Success = agent produced a patch (returncode may be non-zero even on agent success).
-        succeeded = bool(patch_diff)
+        succeeded = bool(patch_diff and exploit_script)
 
         if not succeeded:
             failure_msg = resp.stderr or resp.stdout or f"exit_status={resp.exit_status}"
             if not patch_diff:
                 failure_msg = "Agent did not produce /tmp/vuln.patch"
+            elif not exploit_script:
+                failure_msg = f"Agent did not produce {exploit_path}"
             logger.warning("[%s] llm_inject FAILED: %s", request.project, failure_msg)
             return InjectionResult(
                 project=request.project,
@@ -388,8 +376,7 @@ class LLMInjectStrategy(InjectionStrategy):
                 },
                 paths={
                     "exploit_dir": exploit_rel,
-                    "snapshot_manifest": f"{snapshot_rel}/manifest.json",
-                },
+                        },
                 failure={"cause": "agent_failed", "message": failure_msg},
             )
 
@@ -420,8 +407,7 @@ class LLMInjectStrategy(InjectionStrategy):
             },
             paths={
                 "exploit_dir": exploit_rel,
-                "snapshot_manifest": f"{snapshot_rel}/manifest.json",
-            },
+                },
             artifacts={
                 "patch_diff": patch_diff,
                 "attack_script": exploit_script,
@@ -431,33 +417,3 @@ class LLMInjectStrategy(InjectionStrategy):
             },
             failure=None,
         )
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def _parse_exit_marker(output: str, marker: str) -> int | None:
-    """Extract integer exit code from a ``MARKER:N`` sentinel in command output."""
-    m = re.search(rf"{re.escape(marker)}:(\d+)", output)
-    return int(m.group(1)) if m else None
-
-
-def _parse_post_results(post_results: list[dict]) -> tuple[bool, bool]:
-    """
-    Parse post-command outputs to determine:
-      - harness_passed: HARNESS_EXIT:0 found in harness output
-      - attack_triggered: ATTACK_EXIT non-zero (and marker present) in attack output
-    """
-    harness_passed = False
-    attack_triggered = False
-
-    for pr in post_results:
-        cmd = pr.get("command", "")
-        output = pr.get("output", "")[:3000]
-        if "test.sh" in cmd:
-            code = _parse_exit_marker(output, "HARNESS_EXIT")
-            harness_passed = (code == 0) if code is not None else False
-        elif "ATTACK_EXIT" in output:
-            code = _parse_exit_marker(output, "ATTACK_EXIT")
-            attack_triggered = (code is not None and code != 0)
-
-    return harness_passed, attack_triggered

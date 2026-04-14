@@ -2,7 +2,7 @@
 
 Automated vulnerability injection and agent task evaluation for synthetic security dataset
 creation. Vuljector injects semantically plausible vulnerabilities into real OSS-Fuzz
-projects, verifies them (exploit triggers + tests pass), then runs swe-agent-mini on
+projects, verifies them (exploit triggers are enforced; unit-test results are recorded), then runs swe-agent-mini on
 synthetic tasks derived from those vulnerabilities to collect trajectories for SFT.
 
 ## What It Does
@@ -13,7 +13,7 @@ Five-phase pipeline:
 Init             Build image, detect commit, discover test harness → portable project definition
 Phase 1 — Setup      Build/cache ready container for local use
 Phase 2 — Selection  Find where to inject: static analysis, CodeQL, LLM exploration, or CVE
-Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, snapshot
+Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, persist code-diff snapshot
 Phase 4 — CVE Report  Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
 Phase 5 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
 ```
@@ -57,13 +57,13 @@ The Docker image is built automatically by `setup` when needed — no manual bui
 
 ### Initialize a project
 
-`init` builds the Docker image, detects the secure base commit, discovers the test harness, and writes everything to `vuljector-projects/`. The result is a self-contained, portable project definition that can be committed and shared. The processed docker image can be storred to dockerhub.  
+`init` builds the Docker image, detects the secure base commit, discovers the test harness, and writes everything to `vuljector-projects/`. The result is a self-contained, portable project definition that can be committed and shared. The processed Docker image can be pushed to Docker Hub.
 
 ```bash
 uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
 ```
 
-This creates `vuljector-projects/flask/` with `project.json` (including fetching the proper commit), `setup/`, and `unit_tests/`.
+This creates `vuljector-projects/flask/` with `project.json` (including the secure base commit), `setup/`, and `unit_tests/`.
 The directory name must exactly match the project name under `oss-fuzz/projects/`.
 
 To override the source subdirectory (if it differs from the project name):
@@ -180,15 +180,16 @@ uv run vuljector injection flask \
 
 ### Shared verification
 
-Regardless of strategy, the patch is applied to the persistent container and verified:
+Regardless of strategy, the patch is applied in a fresh container and verified:
 
 ```
-exploit on vulnerable code  →  expects non-zero exit (triggered)
-reset to secure_base_commit →  expects zero exit (not triggered)
-unit tests                  →  expects baseline test count to pass
+exploit on secure code          →  expects zero exit (not triggered)
+apply vulnerable code + rebuild →  if the project needs it
+unit tests                      →  expects baseline test count to pass
+exploit on vulnerable code      →  expects non-zero exit (triggered)
 ```
 
-Only entries that pass all three checks are persisted to the dataset.
+Only entries that pass verification are persisted to the dataset.
 
 ## CVE Report (Phase 4)
 
@@ -198,7 +199,7 @@ Generate a CVE JSON 5.0 record for any vulnerability in the dataset:
 uv run vuljector cve-report flask vulnerability_8 claude-sonnet-4-6
 ```
 
-Requires `patch.diff`, `exploit_files/`, and `snapshot/` to be present in the vulnerability folder (produced by injection). Writes `cve_report.json` alongside them. The CWE is validated against the approved list (`src/utils/cwe/cwe_categories.csv`) and the CVSS 3.1 score is computed deterministically from the vector.
+Requires `patch.diff` and `exploit_files/` to be present in the vulnerability folder (produced by injection). Writes `cve_report.json` alongside them. The CWE is validated against the approved list (`src/utils/cwe/cwe_categories.csv`) and the CVSS 3.1 score is computed deterministically from the vector.
 
 ## Agent Tasks (Phase 5)
 
@@ -230,7 +231,7 @@ uv run vuljector agent-task flask vulnerability_0 secure_patch claude-sonnet-4-6
 ```
 runs/agent_tasks/<project>/<task_type>/<run_id>/
   task_request.json     # inputs
-  task_spec.json        # full task spec (CWE, patch diff, affected files)
+  task_spec.json        # full task spec (CWE + affected files from patch.diff)
   trajectory.json       # raw mini-swe-agent conversation
   validation_result.json
   task_result.json      # validation status + quality metrics + SFT tier

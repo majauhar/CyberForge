@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ from setup.setup_test_harness import (
 )
 from setup.dockerhub_image import dockerhub_image_ref, publish_ready_image
 from utils.json_io import write_json
-from utils.paths import init_run_dir, new_run_id, project_root
+from utils.paths import init_run_dir, new_run_id, project_root, vuljector_root
 from vuljector.core import build_runtime, load_project_config
 from vuljector.io_contracts import ProjectConfig
 
@@ -42,6 +43,7 @@ def run_init(
 
     repo_url = _main_repo_url(proj_dir)
     resolved_target_dir = target_dir or infer_target_dir(proj_dir, repo_url, project)
+    language = _project_language(project)
 
     out_dir = project_root(project)
     cfg_path = out_dir / "project.json"
@@ -54,23 +56,27 @@ def run_init(
     out_dir.mkdir(parents=True, exist_ok=True)
     setup_dir = out_dir / "setup"
     setup_dir.mkdir(parents=True, exist_ok=True)
-    for f in proj_dir.iterdir():
-        if f.is_file():
-            shutil.copy2(f, setup_dir / f.name)
+    for entry in proj_dir.iterdir():
+        dst = setup_dir / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, dst)
+        elif entry.is_file():
+            shutil.copy2(entry, dst)
 
     payload: dict = {
         "project": project,
         "main_repo_url": repo_url,
         "target_dir": resolved_target_dir,
         "secure_base_commit": "",
+        "language": language,
     }
     write_json(cfg_path, payload)
 
     config = load_project_config(project)
     runtime = build_runtime(config)
-    runtime.ensure_image()
+    runtime.ensure_setup_image()
 
-    commit = _detect_commit(runtime)
+    commit = runtime.detect_commit()
     config.secure_base_commit = commit
     runtime.secure_base_commit = commit
     runtime.main_repo_url = repo_url
@@ -99,7 +105,13 @@ def run_init(
     if not ok:
         raise RuntimeError(f"[{project}] Test harness invalid after init: {msg}")
 
-    expected_count, unit_tests_enabled = run_baseline_unit_tests(runtime=runtime, project=project)
+    runtime.build_ready_image(unit_tests_dir=unit_tests_dir)
+    expected_count, unit_tests_enabled = run_baseline_unit_tests(
+        runtime=runtime,
+        project=project,
+        image_tag=runtime.ready_image_tag,
+        baked_harness=True,
+    )
 
     payload["unit_tests"] = {
         "enabled": unit_tests_enabled,
@@ -108,15 +120,7 @@ def run_init(
 
     if publish_dockerhub_namespace:
         image_ref = dockerhub_image_ref(namespace=publish_dockerhub_namespace, project=project)
-        runtime.build_ready_image()
-        runtime.sync_ready_image_to_secure_commit()
-        publish_ready_image(
-            source_image=runtime.ready_image_tag,
-            image_ref=image_ref,
-            repo_dir=runtime.repo_dir_in_container,
-            secure_base_commit=commit,
-            unit_tests_dir=unit_tests_dir,
-        )
+        publish_ready_image(source_image=runtime.ready_image_tag, image_ref=image_ref)
         payload["dockerhub_image"] = image_ref
 
     write_json(cfg_path, payload)
@@ -126,23 +130,11 @@ def run_init(
         "run_id": run_id,
         "config_path": str(cfg_path),
         "target_dir": resolved_target_dir,
+        "language": language,
         "secure_base_commit": commit,
         "dockerhub_image": payload.get("dockerhub_image", ""),
         "unit_tests": payload["unit_tests"],
     }
-
-
-def _detect_commit(runtime) -> str:
-    result = subprocess.run(
-        ["docker", "run", "--rm", runtime.image_tag,
-         "git", "-C", runtime.repo_dir_in_container, "rev-parse", "HEAD"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"[{runtime.project}] Could not detect commit from image: {result.stderr.strip()}"
-        )
-    return result.stdout.strip()
 
 
 def _main_repo_url(oss_fuzz_project_dir: Path) -> str:
@@ -156,3 +148,20 @@ def _main_repo_url(oss_fuzz_project_dir: Path) -> str:
                 return url
             raise ValueError(f"Empty main_repo in {yaml_path}")
     raise ValueError(f"No main_repo in {yaml_path}")
+
+
+def _project_language(project: str) -> str | None:
+    csv_path = vuljector_root() / "scripts" / "oss_fuzz_full.csv"
+    if not csv_path.exists():
+        logger.warning("[%s] Missing language catalog: %s", project, csv_path)
+        return None
+
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if (row.get("name") or "").strip() != project:
+                continue
+            language = (row.get("language") or "").strip().lower()
+            return language or None
+
+    logger.warning("[%s] Project not found in %s; leaving language unset", project, csv_path)
+    return None
