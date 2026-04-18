@@ -123,7 +123,7 @@ class InjectionResult:
     cwe_id: str | None
     strategy: dict[str, Any]
     usage: dict[str, Any]
-    # Real file paths relative to the run directory (exploit_dir, snapshot_manifest, etc.)
+    # Real file paths relative to the run directory (exploit_dir, patch.diff, etc.)
     paths: dict[str, str]
     # Inline artifact content — patch diff, attack script, etc. NOT file paths.
     artifacts: dict[str, str] = field(default_factory=dict)
@@ -148,25 +148,3 @@ class VerificationResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-@dataclass
-class SnapshotFile:
-    repo_path: str
-    snapshot_path: str
-    change_type: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class SnapshotManifest:
-    project: str
-    vulnerability_id: str
-    files: list[SnapshotFile] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["files"] = [f.to_dict() for f in self.files]
-        return payload

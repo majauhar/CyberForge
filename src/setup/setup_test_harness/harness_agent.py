@@ -12,38 +12,46 @@ from utils.agent.prompts import SYSTEM_TEMPLATE, TEST_DISCOVERY_TASK
 from utils.paths import project_root
 from verifier.unit_tests import extract_passing_count
 
-from .layout import PARSER_PATH, write_test_harness
+from .layout import HARNESS_DIR, HARNESS_SCRIPT_PATH, PARSER_PATH, harness_exec_command, write_test_harness
 
 logger = logging.getLogger(__name__)
 
 
-def run_baseline_unit_tests(*, runtime, project: str) -> tuple[int | None, bool]:
-    """Run unit_tests/test.sh in a fresh container; return (passing_count, enabled)."""
+def run_baseline_unit_tests(
+    *,
+    runtime,
+    project: str,
+    image_tag: str | None = None,
+    baked_harness: bool = False,
+) -> tuple[int | None, bool]:
+    """Run the discovered test harness in a fresh container; return (passing_count, enabled)."""
     script_host = project_root(project) / "unit_tests" / "test.sh"
     if not script_host.exists():
         return None, False
 
-    encoded_harness = base64.b64encode(script_host.read_text(encoding="utf-8").encode()).decode()
-
-    parser_host = script_host.parent / "parse_results.py"
-    if not parser_host.exists():
-        raise RuntimeError(
-            f"[{project}] Missing required {parser_host} (expected alongside unit_tests/test.sh)."
+    if baked_harness:
+        cmd = f"cd {runtime.repo_dir_in_container} && {harness_exec_command()}"
+    else:
+        encoded_harness = base64.b64encode(script_host.read_text(encoding="utf-8").encode()).decode()
+        parser_host = script_host.parent / "parse_results.py"
+        if not parser_host.exists():
+            raise RuntimeError(
+                f"[{project}] Missing required {parser_host} (expected alongside unit_tests/test.sh)."
+            )
+        encoded_parser = base64.b64encode(parser_host.read_bytes()).decode()
+        cmd = (
+            f"mkdir -p {HARNESS_DIR} && "
+            f"echo '{encoded_parser}' | base64 -d > {PARSER_PATH} && "
+            f"echo '{encoded_harness}' | base64 -d > {HARNESS_SCRIPT_PATH} && "
+            f"chmod +x {HARNESS_SCRIPT_PATH} {PARSER_PATH} && "
+            f"cd {runtime.repo_dir_in_container} && bash {HARNESS_SCRIPT_PATH}"
         )
-    encoded_parser = base64.b64encode(parser_host.read_bytes()).decode()
-
-    cmd = (
-        f"bash /src/build.sh 2>&1 | tail -5 || true && "
-        f"mkdir -p /workspace/run/unit_tests && "
-        f"echo '{encoded_parser}' | base64 -d > /workspace/run/unit_tests/parse_results.py && "
-        f"echo '{encoded_harness}' | base64 -d > /tmp/test_harness.sh && "
-        f"chmod +x /tmp/test_harness.sh && "
-        f"cd {runtime.repo_dir_in_container} && bash /tmp/test_harness.sh"
-    )
     try:
-        result = subprocess.run(
-            ["docker", "run", "--rm", runtime.image_tag, "bash", "-c", cmd],
-            capture_output=True, text=True, timeout=300,
+        result = runtime.run_container_command(
+            ["bash", "-lc", cmd],
+            image_tag=image_tag,
+            use_setup_image=image_tag is None,
+            timeout=300,
         )
     except subprocess.TimeoutExpired:
         logger.warning("[%s] Baseline unit test run timed out.", project)
@@ -60,21 +68,16 @@ def run_baseline_unit_tests(*, runtime, project: str) -> tuple[int | None, bool]
 def try_agent_harness(
     *, runtime, project: str, run_dir: Path, model_id: str, src_dir: str, unit_tests_dir: Path
 ) -> None:
-    """
-    Discover test harness via agent, write it, and validate with a baseline run.
-    Raises RuntimeError if the agent produces no script or one missing the parser pipeline.
-    Warns (does not raise) if baseline yields 0 passing tests.
-    """
+    """Discover test harness via agent and validate it with a baseline run."""
     logger.info("[%s] Running test discovery agent fallback.", project)
     trajectory_path = str(run_dir / "logs" / "test_discovery_trajectory.json")
 
-    # Install parse_results.py so the agent can run and verify the full pipeline.
     parser_host = project_root(project) / "unit_tests" / "parse_results.py"
     encoded_parser = base64.b64encode(parser_host.read_bytes()).decode()
     install_parser = (
-        f"mkdir -p /workspace/run/unit_tests && "
-        f"echo '{encoded_parser}' | base64 -d > /workspace/run/unit_tests/parse_results.py && "
-        f"chmod +x /workspace/run/unit_tests/parse_results.py"
+        f"mkdir -p {HARNESS_DIR} && "
+        f"echo '{encoded_parser}' | base64 -d > {PARSER_PATH} && "
+        f"chmod +x {PARSER_PATH}"
     )
 
     agent_req = AgentRequest(
@@ -93,7 +96,7 @@ def try_agent_harness(
         trajectory_path=trajectory_path,
     )
 
-    resp = run_agent_task(runtime, agent_req)
+    resp = run_agent_task(runtime, agent_req, allow_setup_image=True)
     harness_script = resp.extracted_files.get("/tmp/test_harness.sh", "").strip()
 
     if not harness_script:
@@ -115,5 +118,6 @@ def try_agent_harness(
     else:
         logger.warning(
             "[%s] Agent harness written but baseline yielded count=%s — review before use.",
-            project, count,
+            project,
+            count,
         )

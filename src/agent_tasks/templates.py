@@ -221,7 +221,7 @@ cd /src/{project} && python3 /tmp/ref_attack.py 2>&1; echo "ATTACK_EXIT:$?"
 
 **6. Run the test harness to verify no regressions:**
 ```mswea_bash_command
-bash /tmp/test_harness.sh 2>&1 | tail -20; echo "HARNESS_EXIT:$?"
+bash /workspace/run/unit_tests/test.sh 2>&1 | tail -20; echo "HARNESS_EXIT:$?"
 ```
 
 **7. Submit:**

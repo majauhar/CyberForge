@@ -26,18 +26,8 @@ def run_setup(project: str) -> dict:
     })
 
     runtime = build_runtime(config)
-    runtime.ensure_image()
-
-    if runtime.has_ready_image():
-        logger.info("[%s] Ready image already up-to-date: %s", project, runtime.ready_image_tag)
-    else:
-        logger.info("[%s] Building ready image ...", project)
-        runtime.build_ready_image()
-        logger.info("[%s] Ready image built: %s", project, runtime.ready_image_tag)
-
-    logger.info("[%s] Aligning ready image to secure commit %s ...", project, config.secure_base_commit)
-    runtime.sync_ready_image_to_secure_commit()
-    logger.info("[%s] Ready image synced to secure commit.", project)
+    ready_image = runtime.ensure_ready_image(unit_tests_dir=project_root(project) / "unit_tests")
+    logger.info("[%s] Ready image available: %s", project, ready_image)
 
     runtime.mark_setup_completed(True)
 
@@ -48,8 +38,6 @@ def run_setup(project: str) -> dict:
         "status": "success",
         "secure_base_commit": config.secure_base_commit,
         "unit_tests": config.unit_tests,
-        "ready_image_tag": runtime.ready_image_tag,
-        "ready_out_manifest": runtime.meta.get("ready_out_manifest"),
     }
     write_json(run_dir / "setup_result.json", result)
     return result

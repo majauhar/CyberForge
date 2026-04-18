@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from setup.container_runtime import ContainerRuntime
+from setup.setup_test_harness.layout import harness_exec_command
 
 
 def run_unit_tests(
@@ -31,7 +32,7 @@ def run_unit_tests(
     if not parser_host.exists():
         raise RuntimeError(f"[{project_root}] Missing required {parser_host} (expected alongside unit_tests/test.sh).")
 
-    test_result = runtime.exec("bash /workspace/run/unit_tests/test.sh", workdir=repo_dir)
+    test_result = runtime.exec(harness_exec_command(), workdir=repo_dir)
     raw_output = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
     passed_count = extract_passing_count(raw_output)
 
@@ -45,16 +46,11 @@ def run_unit_tests(
     delta = int(passed_count) - int(expected)
     if delta == 0:
         return "passed", passed_count, f"{passed_count} passed (matches baseline).", raw_output
-    else:
-        return "failed", passed_count, f"{passed_count} passed, expected {expected} (delta={delta:+d}).", raw_output
+    return "failed", passed_count, f"{passed_count} passed, expected {expected} (delta={delta:+d}).", raw_output
 
 
 def extract_passing_count(output: str) -> int | None:
-    """Parse the JSON summary line appended by parse_results.py: {"passed": N, "failed": M}.
-
-    Scans from the end so stray stderr lines (e.g. pip warnings) after the JSON
-    do not prevent detection.
-    """
+    """Parse the JSON summary line appended by parse_results.py: {"passed": N, "failed": M}."""
     for line in reversed(output.splitlines()):
         line = line.strip()
         if not line:

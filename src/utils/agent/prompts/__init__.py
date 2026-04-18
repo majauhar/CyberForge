@@ -2,7 +2,7 @@
 
 from .cve_injection import CVE_INJECT_TASK
 from .cve_report import CVE_REPORT_TASK
-from .injection import ATTACK_SCRIPT_TASK, VULN_INJECT_TASK, VULN_PATCH_TASK
+from .injection import ATTACK_SCRIPT_TASK, VULN_INJECT_TASK
 from .selection import (
     SPECIALIST_ROLES,
     build_repo_explore_task,
@@ -26,7 +26,6 @@ __all__ = [
     "SYSTEM_TEMPLATE",
     "TEST_DISCOVERY_TASK",
     "VULN_INJECT_TASK",
-    "VULN_PATCH_TASK",
     "build_harness_note",
     "build_repo_explore_task",
     "SPECIALIST_ROLES",

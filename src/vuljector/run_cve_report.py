@@ -17,7 +17,6 @@ _REQUIRED_FILES = [
     "vulnerability_metadata.json",
     "patch.diff",
     "exploit_files",
-    "snapshot",
 ]
 
 

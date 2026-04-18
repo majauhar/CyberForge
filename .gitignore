@@ -443,3 +443,6 @@ MIGRATION.md
 __pycache__/
 *.py[cod]
 src/.env
+
+# Dataset for RAG selector
+/src/selector/rag_select/dataset/

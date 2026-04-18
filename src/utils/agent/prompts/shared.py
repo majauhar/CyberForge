@@ -51,7 +51,7 @@ def build_harness_note(harness_available: bool) -> str:
     if harness_available:
         return (
             "A test harness is pre-installed at `/workspace/run/unit_tests/test.sh`. "
-            "Run it to verify the patch doesn't break existing tests."
+            "Run it to verify the patch does not break existing tests."
         )
     return (
         "No test harness is available for this project — "
