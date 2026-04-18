@@ -15,6 +15,47 @@ from .unit_tests import run_unit_tests
 logger = logging.getLogger(__name__)
 
 
+def _contains_any(text: str, patterns: list[str]) -> bool:
+    hay = text.lower()
+    return any(pattern.lower() in hay for pattern in patterns)
+
+
+def _classify_oracle_signal(
+    *,
+    output: str,
+    triggered: bool,
+    expected_crash_type: str | None,
+    expected_crash_state: list[str] | None,
+) -> tuple[bool, str | None]:
+    """
+    Return (is_valid_signal, invalid_reason).
+    """
+    infra_or_internal_patterns = [
+        "MISSING_BINARY",
+        "command not found",
+        "No such file or directory",
+        "AddressSanitizer: CHECK failed",
+        "LeakSanitizer has encountered a fatal error",
+        "runtime error: sanitizer",
+    ]
+    if _contains_any(output, infra_or_internal_patterns):
+        return False, "infra_or_sanitizer_internal_error"
+
+    if not triggered:
+        return True, None
+
+    if expected_crash_type and expected_crash_type.lower() not in output.lower():
+        return False, "crash_type_mismatch"
+
+    expected_frames = [frame.strip() for frame in (expected_crash_state or []) if frame and frame.strip()]
+    if expected_frames:
+        # Require at least one expected crash-state frame to appear.
+        if not any(frame.lower() in output.lower() for frame in expected_frames[:5]):
+            return False, "crash_state_mismatch"
+
+    return True, None
+
+
 def run_verification(
     *,
     runtime: ContainerRuntime,
@@ -24,8 +65,11 @@ def run_verification(
     secure_base_commit: str,
     git_backup_dir: Path,  # kept for call-site compatibility, unused
     unit_tests: dict | None,
+    skip_unit_tests: bool = False,
     project_root: Path,
     exploit_path: str,
+    expected_crash_type: str | None = None,
+    expected_crash_state: list[str] | None = None,
     pre_vulnerable_commands: list[str] | None = None,
     pre_secure_commands: list[str] | None = None,
 ) -> VerificationResult:
@@ -35,19 +79,28 @@ def run_verification(
     runtime.exec("git diff --binary > /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
         "snapshot patch generation failed"
     )
+    has_snapshot_patch = runtime.exec("test -s /tmp/vuljector.patch", workdir=repo_dir).returncode == 0
 
     # ── Unit tests (informational only — never aborts pipeline) ──────────────
-    logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
-    test_status, passed_count, test_message, test_raw_output = run_unit_tests(
-        runtime,
-        repo_dir=repo_dir,
-        unit_tests=unit_tests,
-        project_root=project_root,
-    )
-    logger.info(
-        "[%s] unit_tests: status=%s passed=%s message=%s\n--- test output ---\n%s\n--- end ---",
-        project, test_status, passed_count, test_message, (test_raw_output or "")[:3000],
-    )
+    if skip_unit_tests:
+        test_status, passed_count, test_message, test_raw_output = (
+            "skipped",
+            None,
+            "Unit tests skipped by request.",
+            "",
+        )
+    else:
+        logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
+        test_status, passed_count, test_message, test_raw_output = run_unit_tests(
+            runtime,
+            repo_dir=repo_dir,
+            unit_tests=unit_tests,
+            project_root=project_root,
+        )
+        logger.info(
+            "[%s] unit_tests: status=%s passed=%s message=%s\n--- test output ---\n%s\n--- end ---",
+            project, test_status, passed_count, test_message, (test_raw_output or "")[:3000],
+        )
 
     def _make_result(status, checks, failure_cause, failure_message) -> VerificationResult:
         return VerificationResult(
@@ -84,6 +137,13 @@ def run_verification(
             )
         return None
 
+    def _restore_vulnerable_snapshot() -> None:
+        if not has_snapshot_patch:
+            return
+        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
+            "restore vulnerable patch failed"
+        )
+
     # ── Check 1: exploit must trigger on vulnerable code ─────────────────────
     setup_failure = _run_pre_exploit_commands(pre_vulnerable_commands, phase="vulnerable setup")
     if setup_failure is not None:
@@ -101,6 +161,19 @@ def run_verification(
             {"unit_tests": test_status, "exploit_on_vulnerable": "timed_out", "exploit_on_secure": "skipped"},
             "exploit_timed_out_on_vulnerable",
             vuln_msg,
+        )
+    vuln_valid, vuln_invalid_reason = _classify_oracle_signal(
+        output=vuln_msg,
+        triggered=vuln_ok,
+        expected_crash_type=expected_crash_type,
+        expected_crash_state=expected_crash_state,
+    )
+    if not vuln_valid:
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "invalid", "exploit_on_secure": "skipped"},
+            "oracle_invalid_on_vulnerable",
+            vuln_invalid_reason or vuln_msg,
         )
     logger.info("[%s] exploit_on_vulnerable: triggered=%s", project, vuln_ok)
     if not vuln_ok:
@@ -122,9 +195,7 @@ def run_verification(
 
     setup_failure = _run_pre_exploit_commands(pre_secure_commands, phase="secure setup")
     if setup_failure is not None:
-        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-            "restore vulnerable patch failed"
-        )
+        _restore_vulnerable_snapshot()
         logger.info("[%s] === VERIFICATION FAIL: secure pre-exploit setup failed ===", project)
         return setup_failure
 
@@ -134,9 +205,7 @@ def run_verification(
         runtime, repo_dir=repo_dir, exploit_path=exploit_path, label="secure"
     )
     if secure_timed_out:
-        runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-            "restore vulnerable patch failed"
-        )
+        _restore_vulnerable_snapshot()
         logger.info("[%s] === VERIFICATION FAIL: exploit timed out on secure ===", project)
         return _make_result(
             "failure",
@@ -144,12 +213,24 @@ def run_verification(
             "exploit_timed_out_on_secure",
             secure_msg,
         )
+    secure_valid, secure_invalid_reason = _classify_oracle_signal(
+        output=secure_msg,
+        triggered=secure_ok,
+        expected_crash_type=expected_crash_type,
+        expected_crash_state=expected_crash_state,
+    )
+    if not secure_valid:
+        _restore_vulnerable_snapshot()
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "passed", "exploit_on_secure": "invalid"},
+            "oracle_invalid_on_secure",
+            secure_invalid_reason or secure_msg,
+        )
     logger.info("[%s] exploit_on_secure: triggered=%s", project, secure_ok)
 
     # Re-apply the vulnerability for snapshot generation.
-    runtime.exec("git apply --whitespace=fix /tmp/vuljector.patch", workdir=repo_dir).raise_for_status(
-        "restore vulnerable patch failed"
-    )
+    _restore_vulnerable_snapshot()
 
     if secure_ok:
         logger.info("[%s] === VERIFICATION FAIL: exploit triggers on secure version too ===", project)
