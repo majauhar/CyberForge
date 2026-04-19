@@ -236,7 +236,8 @@ def _verify_attempt(*, runtime, config, project: str, run_id: str, attempt_idx: 
 
 
 def _rebuild_command(runtime) -> str | None:
-    return "bash /src/build.sh"
+    language = getattr(runtime, "language", None) or "c++"
+    return f"FUZZING_LANGUAGE={language} compile"
 
 
 def _selection_run_id_from_candidates(path: str) -> str:

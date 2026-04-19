@@ -13,6 +13,47 @@ from .unit_tests import run_unit_tests
 logger = logging.getLogger(__name__)
 
 
+def _contains_any(text: str, patterns: list[str]) -> bool:
+    hay = text.lower()
+    return any(pattern.lower() in hay for pattern in patterns)
+
+
+def _classify_oracle_signal(
+    *,
+    output: str,
+    triggered: bool,
+    expected_crash_type: str | None,
+    expected_crash_state: list[str] | None,
+) -> tuple[bool, str | None]:
+    """
+    Return (is_valid_signal, invalid_reason).
+    """
+    infra_or_internal_patterns = [
+        "MISSING_BINARY",
+        "command not found",
+        "No such file or directory",
+        "AddressSanitizer: CHECK failed",
+        "LeakSanitizer has encountered a fatal error",
+        "runtime error: sanitizer",
+    ]
+    if _contains_any(output, infra_or_internal_patterns):
+        return False, "infra_or_sanitizer_internal_error"
+
+    if not triggered:
+        return True, None
+
+    if expected_crash_type and expected_crash_type.lower() not in output.lower():
+        return False, "crash_type_mismatch"
+
+    expected_frames = [frame.strip() for frame in (expected_crash_state or []) if frame and frame.strip()]
+    if expected_frames:
+        # Require at least one expected crash-state frame to appear.
+        if not any(frame.lower() in output.lower() for frame in expected_frames[:5]):
+            return False, "crash_state_mismatch"
+
+    return True, None
+
+
 def run_verification(
     *,
     runtime,
@@ -21,8 +62,11 @@ def run_verification(
     repo_dir: str,
     patch_diff: str,
     unit_tests: dict | None,
+    skip_unit_tests: bool = False,
     project_root: Path,
     exploit_path: str,
+    expected_crash_type: str | None = None,
+    expected_crash_state: list[str] | None = None,
     rebuild_command: str | None = None,
 ) -> VerificationResult:
     logger.info("[%s] === VERIFICATION START ===", project)
@@ -58,6 +102,22 @@ def run_verification(
             "",
             "",
         )
+    secure_valid, secure_invalid_reason = _classify_oracle_signal(
+        output=secure_msg,
+        triggered=secure_ok,
+        expected_crash_type=expected_crash_type,
+        expected_crash_state=expected_crash_state,
+    )
+    if not secure_valid:
+        return _make_result(
+            "failure",
+            {"unit_tests": "skipped", "exploit_on_vulnerable": "skipped", "exploit_on_secure": "invalid"},
+            "oracle_invalid_on_secure",
+            secure_invalid_reason or secure_msg,
+            None,
+            "",
+            "",
+        )
     if secure_ok:
         return _make_result(
             "failure",
@@ -78,13 +138,16 @@ def run_verification(
             detail = (rebuild_result.stderr or rebuild_result.stdout or "").strip()[-500:]
             logger.warning("[%s] rebuild after patch failed; continuing verification: %s", project, detail)
 
-    logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
-    test_status, passed_count, test_message, test_raw_output = run_unit_tests(
-        runtime,
-        repo_dir=repo_dir,
-        unit_tests=unit_tests,
-        project_root=project_root,
-    )
+    if skip_unit_tests:
+        test_status, passed_count, test_message, test_raw_output = "skipped", None, "Unit tests skipped by request.", ""
+    else:
+        logger.info("[%s] --- unit tests (on vulnerable version) ---", project)
+        test_status, passed_count, test_message, test_raw_output = run_unit_tests(
+            runtime,
+            repo_dir=repo_dir,
+            unit_tests=unit_tests,
+            project_root=project_root,
+        )
 
     logger.info("[%s] --- exploit on VULNERABLE version ---", project)
     vuln_ok, vuln_msg, vuln_timed_out = run_exploit(
@@ -93,6 +156,22 @@ def run_verification(
         exploit_path=exploit_path,
         label="vulnerable",
     )
+    vuln_valid, vuln_invalid_reason = _classify_oracle_signal(
+        output=vuln_msg,
+        triggered=vuln_ok,
+        expected_crash_type=expected_crash_type,
+        expected_crash_state=expected_crash_state,
+    )
+    if not vuln_valid:
+        return _make_result(
+            "failure",
+            {"unit_tests": test_status, "exploit_on_vulnerable": "invalid", "exploit_on_secure": "passed"},
+            "oracle_invalid_on_vulnerable",
+            vuln_invalid_reason or vuln_msg,
+            passed_count,
+            test_message,
+            test_raw_output,
+        )
     if vuln_timed_out:
         return _make_result(
             "failure",

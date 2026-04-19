@@ -165,9 +165,12 @@ class ContainerRuntime:
         if not self.has_ready_image():
             return False
         result = self.run_container_command(
-            ["bash", "-lc", f"test -x {HARNESS_DIR}/test.sh && test -x {HARNESS_DIR}/parse_results.py"],
+            ["bash", "-lc", (
+                f"test -x {HARNESS_DIR}/test.sh && test -x {HARNESS_DIR}/parse_results.py"
+                " && find /out -maxdepth 1 -type f -executable | grep -q ."
+            )],
             image_tag=self.ready_image_tag,
-            timeout=60,
+            timeout=120,
         )
         return result.returncode == 0
 
@@ -244,10 +247,14 @@ class ContainerRuntime:
                     workdir=self.repo_dir_in_container,
                 ).raise_for_status("git reset to secure_base_commit failed")
             session.exec("git clean -fdx", workdir=self.repo_dir_in_container).raise_for_status("git clean failed")
-            build_result = session.exec("bash /src/build.sh", timeout=1800)
+            build_result = session.exec(
+                "compile",
+                env={"FUZZING_LANGUAGE": self.language or "c++"},
+                timeout=1800,
+            )
             if build_result.returncode != 0:
                 detail = (build_result.stderr or build_result.stdout or "").strip()[-500:]
-                logger.warning("[%s] build.sh failed while creating ready image; continuing with partial image: %s", self.project, detail)
+                logger.warning("[%s] compile failed while creating ready image; continuing with partial image: %s", self.project, detail)
             session.exec(f"mkdir -p {HARNESS_DIR}").raise_for_status("failed to create harness directory")
             session.copy_to(unit_tests_dir, HARNESS_DIR)
             session.exec(
