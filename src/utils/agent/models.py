@@ -27,6 +27,7 @@ class AgentResponse:
     stderr: str
     messages: list[dict] = field(default_factory=list)             # raw for AgentTelemetry
     extracted_files: dict[str, str] = field(default_factory=dict)  # {container_path: content}
+    extracted_dirs: dict[str, str] = field(default_factory=dict)   # {container_path: base64(tar.gz)}
     post_results: list[dict] = field(default_factory=list)         # [{command, returncode, output}]
     exit_status: str = ""
     total_steps: int = 0

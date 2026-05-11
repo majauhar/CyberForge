@@ -33,6 +33,20 @@ Main entry points:
 - `reproduction/download_oss_fuzz_testcases.py`
 - `reproduction/build_historical_bug_reproduction_manifest.py`
 
+## `fuzzing/`
+
+Helpers for fuzz-guided selection analysis, harness mapping, patch-guided
+validation, and manual fuzzing experiments.
+
+Main entry points:
+- `fuzzing/mine_public_oss_fuzz_metadata.py`
+- `fuzzing/extract_introspector_path_signals.py`
+- `fuzzing/map_injection_to_harness.py`
+- `fuzzing/recommend_fuzz_targets.py`
+- `fuzzing/run_patch_guided_fuzz_validation.py`
+- `fuzzing/triage_fuzz_hot_paths.py`
+- `fuzzing/test_fuzz_native_pipeline.sh`
+
 ## `mining_helpers/`
 
 Shared helper modules used by the entry-point scripts. These are not usually run directly.

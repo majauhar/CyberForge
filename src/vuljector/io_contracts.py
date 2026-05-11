@@ -17,10 +17,13 @@ class ProjectConfig:
     target_dir: str
     secure_base_commit: str
     main_repo_url: str
+    fuzzing_engine: str = "libfuzzer"
     dockerhub_image: str | None = None
     unit_tests: dict[str, Any] | None = None
     # Explicit language override for CodeQL analysis (e.g. "cpp", "python", "javascript").
     language: str | None = None
+    # Optional second-path harnesses intended for post-crash triage tools such as Rex.
+    triage_harnesses: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -145,6 +148,7 @@ class VerificationResult:
     unit_test_passed_count: int | None = None
     unit_test_message: str = ""
     unit_test_raw_output: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

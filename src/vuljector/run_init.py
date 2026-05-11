@@ -16,10 +16,10 @@ from setup.setup_test_harness import (
     try_heuristic_harness,
     validate_unit_tests_dir,
 )
-from setup.dockerhub_image import dockerhub_image_ref, publish_ready_image
+from setup.dockerhub_image import dockerhub_image_ref, dockerhub_tag_for_engine, publish_ready_image
 from utils.json_io import write_json
 from utils.paths import init_run_dir, new_run_id, project_root, vuljector_root
-from vuljector.core import build_runtime, load_project_config
+from vuljector.core import build_runtime, fuzzing_engine_supports_language, load_project_config, normalize_fuzzing_engine
 from vuljector.io_contracts import ProjectConfig
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ def run_init(
     oss_fuzz_path: str,
     target_dir: str | None = None,
     model_id: str = "claude-sonnet-4-6",
+    fuzzing_engine: str = "libfuzzer",
     publish_dockerhub_namespace: str | None = None,
 ) -> dict:
     oss_fuzz = Path(oss_fuzz_path).resolve()
@@ -44,6 +45,12 @@ def run_init(
     repo_url = _main_repo_url(proj_dir)
     resolved_target_dir = target_dir or infer_target_dir(proj_dir, repo_url, project)
     language = _project_language(project)
+    normalized_engine = normalize_fuzzing_engine(fuzzing_engine)
+    if not fuzzing_engine_supports_language(normalized_engine, language):
+        raise ValueError(
+            f"fuzzing_engine={normalized_engine!r} is only supported for native C/C++ projects; "
+            f"language={language!r}"
+        )
 
     out_dir = project_root(project)
     cfg_path = out_dir / "project.json"
@@ -69,6 +76,7 @@ def run_init(
         "target_dir": resolved_target_dir,
         "secure_base_commit": "",
         "language": language,
+        "fuzzing_engine": normalized_engine,
     }
     write_json(cfg_path, payload)
 
@@ -119,7 +127,11 @@ def run_init(
     }
 
     if publish_dockerhub_namespace:
-        image_ref = dockerhub_image_ref(namespace=publish_dockerhub_namespace, project=project)
+        image_ref = dockerhub_image_ref(
+            namespace=publish_dockerhub_namespace,
+            project=project,
+            tag=dockerhub_tag_for_engine(normalized_engine),
+        )
         publish_ready_image(source_image=runtime.ready_image_tag, image_ref=image_ref)
         payload["dockerhub_image"] = image_ref
 
@@ -131,6 +143,7 @@ def run_init(
         "config_path": str(cfg_path),
         "target_dir": resolved_target_dir,
         "language": language,
+        "fuzzing_engine": normalized_engine,
         "secure_base_commit": commit,
         "dockerhub_image": payload.get("dockerhub_image", ""),
         "unit_tests": payload["unit_tests"],

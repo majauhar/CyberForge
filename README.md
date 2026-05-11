@@ -2,23 +2,34 @@
 
 Automated vulnerability injection and agent task evaluation for synthetic security dataset
 creation. Vuljector injects semantically plausible vulnerabilities into real OSS-Fuzz
-projects, verifies them (exploit triggers are enforced; unit-test results are recorded), then runs swe-agent-mini on
-synthetic tasks derived from those vulnerabilities to collect trajectories for SFT.
+projects, verifies them (exploit triggers are enforced; unit-test results are recorded),
+can derive fuzz-backed follow-on PoCs from successful injections, and then runs
+swe-agent-mini on synthetic tasks derived from those vulnerabilities to collect
+trajectories for SFT.
 
 ## What It Does
 
-Five-phase pipeline:
+Core five-phase pipeline:
 
 ```
 Init             Build image, detect commit, discover test harness → portable project definition
 Phase 1 — Setup      Build/cache ready container for local use
-Phase 2 — Selection  Find where to inject: static analysis, CodeQL, LLM exploration, or CVE
+Phase 2 — Selection  Find where to inject: static analysis, CodeQL, fuzz-guided, LLM exploration, or CVE
 Phase 3 — Injection  Inject vulnerability via LLM agent, verify exploit triggers, persist code-diff snapshot
 Phase 4 — CVE Report  Generate a CVE JSON 5.0 record for an existing vulnerability (independent command)
 Phase 5 — Agent Tasks Run swe-agent-mini on synthetic tasks, validate output, score trajectory
 ```
 
 Each phase is independent and rerunnable. Phases communicate through JSON files under `runs/`.
+
+Additional fuzz-native workflows build on successful injection runs:
+
+```
+Fuzz-Guided Selection  Rank injection sites by existing OSS-Fuzz harness reachability and hot-path quality
+Fuzz PoC              Generate replayable fuzz-backed PoCs from successful injection attempts
+Guided Fuzz PoC       Prefer selector metadata first when choosing harnesses and seed templates
+Rex Triage            Package successful replay cases for downstream Rex crash analysis
+```
 
 ## Quick Start
 
@@ -66,6 +77,17 @@ uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz
 This creates `vuljector-projects/flask/` with `project.json` (including the secure base commit), `setup/`, and `unit_tests/`.
 The directory name must exactly match the project name under `oss-fuzz/projects/`.
 
+For native `C` / `C++` projects, you can opt into AFL++ at init or setup time:
+
+```bash
+uv run vuljector init jsoncpp --oss-fuzz-path /path/to/oss-fuzz --fuzzing-engine afl
+uv run vuljector setup jsoncpp --fuzzing-engine afl
+```
+
+Engine-aware local image tags now include the engine name, for example
+`vuljector/jsoncpp:<hash>-afl-ready`. Existing local libFuzzer images are
+still adopted automatically and retagged to the new `-libfuzzer-ready` scheme.
+
 To override the source subdirectory (if it differs from the project name):
 
 ```bash
@@ -98,10 +120,13 @@ uv run vuljector init flask --oss-fuzz-path /path/to/oss-fuzz --model-id claude-
 uv run vuljector setup flask
 uv run vuljector selection flask static_analysis claude-sonnet-4-6
 uv run vuljector selection flask codeql claude-sonnet-4-6
+uv run vuljector selection flask fuzz_guided claude-sonnet-4-6
 uv run vuljector selection flask llm_explore claude-sonnet-4-6 --max-candidates 10
 uv run vuljector selection flask cve_select --max-candidates 5
 uv run vuljector injection flask \
-    runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 3
+    runs/selection/flask/<run_id>/candidates.json claude-sonnet-4-6 --num-vulnerabilities 3
+uv run vuljector injection flask \
+    runs/selection/flask/<run_id>/candidates.json claude-sonnet-4-6 --num-vulnerabilities 3 --auto-fuzz-poc
 
 # Filter candidates by CWE:
 uv run vuljector selection flask static_analysis claude-sonnet-4-6 \
@@ -109,11 +134,43 @@ uv run vuljector selection flask static_analysis claude-sonnet-4-6 \
 
 # Or all phases at once (injection strategy auto-routes based on selection):
 uv run vuljector run flask static_analysis claude-sonnet-4-6
+
+# Post-injection fuzz-backed follow-ons:
+uv run vuljector fuzz-poc batch --source-run-dir runs/injection/flask/<run_id>
+uv run vuljector fuzz-guided-poc batch --source-run-dir runs/injection/flask/<run_id>
+uv run vuljector rex-triage batch --source-run-dir runs/fuzz_poc/flask/<run_id>
+
+# Native AFL++ smoke test:
+uv run vuljector afl-smoke jsoncpp --seconds 15
 ```
 
 ## Selection Strategies
 
-Three complementary strategies. Run one or all — they find different vulnerability classes.
+Four complementary strategies. Run one or all — they find different vulnerability classes.
+
+### `fuzz_guided`
+
+Harness-first selector for OSS-Fuzz targets. It loads local fuzz surface metadata,
+clones the source checkout into `runs/workspaces/<project>/<target_dir>/` if needed,
+and ranks candidate slices by how plausibly an existing harness can still reach them.
+
+Each candidate carries a `fuzz_native` metadata block in `SelectionCandidate.extra`
+with fields such as:
+
+- `preferred_fuzzer` / `alternate_fuzzers`
+- `reachability_kind`
+- `existing_harness_viability`
+- `hot_path_bucket`
+- `helper_judgment`
+- `bug_shape`, `format_family`, and input-model hints
+
+This strategy defaults to "no cap" unless you pass `--max-candidates`, which is useful
+for batch fuzz-native runs.
+
+```bash
+uv run vuljector selection flask fuzz_guided claude-sonnet-4-6
+uv run vuljector selection flask fuzz_guided claude-sonnet-4-6 --max-candidates 15
+```
 
 ### `static_analysis`
 
@@ -168,6 +225,28 @@ Runs a mini-swe-agent call against a fresh ephemeral container. Given a candidat
 CWE hint (from any selection strategy), the agent injects a minimal vulnerability and writes a
 PoC exploit in one shot. Language-aware prompts for Python, C/C++, and generic bash fallback.
 
+Recent C/C++ flows now prefer a self-contained exploit directory rooted at
+`/tmp/exploit/` with `/tmp/exploit/exploit.sh` as the entrypoint so verification,
+fuzz follow-ons, and replay packaging all have one stable handoff format.
+
+### `fuzzer_llm_inject`
+
+Auto-selected for `fuzz_guided` candidates. This is a fuzz-native variant of
+`llm_inject` that keeps the same basic injection loop but augments the prompt with:
+
+- preferred harness and alternate harness metadata
+- format-family and bug-shape hints
+- exploit constraints derived from forward fuzzing context
+- warnings about helper-vs-endpoint drift and blocker hotspots
+
+Route selection is automatic:
+
+```bash
+uv run vuljector selection flask fuzz_guided claude-sonnet-4-6
+uv run vuljector injection flask \
+    runs/selection/flask/<run_id>/candidates.json claude-sonnet-4-6
+```
+
 ### `cve_inject`
 
 Reverses a real CVE. Takes the CVE metadata and fix diff (from `cve_select`) as context to re-introduce the vulnerability in the current codebase. The agent has full freedom — it may reverse the exact fix or locate an equivalent pattern elsewhere and inject a semantically equivalent vulnerability.
@@ -175,7 +254,7 @@ Reverses a real CVE. Takes the CVE metadata and fix diff (from `cve_select`) as 
 ```bash
 uv run vuljector selection flask cve_select --max-candidates 5
 uv run vuljector injection flask \
-    runs/selection/flask/<run_id>/candidates.json --num-vulnerabilities 2 --model-id claude-sonnet-4-6
+    runs/selection/flask/<run_id>/candidates.json claude-sonnet-4-6 --num-vulnerabilities 2
 ```
 
 ### Shared verification
@@ -190,6 +269,93 @@ exploit on vulnerable code      →  expects non-zero exit (triggered)
 ```
 
 Only entries that pass verification are persisted to the dataset.
+
+### Optional post-hoc fuzz follow-up
+
+`injection` can optionally trigger a fuzz-backed follow-on batch immediately after
+the injection run completes:
+
+```bash
+uv run vuljector injection flask \
+    runs/selection/flask/<run_id>/candidates.json claude-sonnet-4-6 \
+    --num-vulnerabilities 3 \
+    --auto-fuzz-poc
+```
+
+This records a `posthoc_fuzz_poc` block in the injection run summary and writes
+generated attempts under `runs/fuzz_poc/<project>/...`.
+
+## Fuzz-Backed PoCs
+
+These workflows take a successful injection run and try to turn it into replayable,
+fuzzer-oriented exploit artifacts in a dedicated runs namespace.
+
+### `fuzz-poc`
+
+Patch-inference-first flow. It maps a successful injection back onto likely harnesses,
+builds minimal exploit inputs, and verifies them with the same secure-vs-vulnerable
+replay contract used by the core injector.
+
+```bash
+# One successful injection attempt -> one or more fuzz-backed PoCs
+uv run vuljector fuzz-poc generate \
+  --source-attempt-dir runs/injection/flask/<run_id>/attempt_00
+
+# Whole injection run -> batch generate and verify
+uv run vuljector fuzz-poc batch \
+  --source-run-dir runs/injection/flask/<run_id>
+
+# Re-run verification only
+uv run vuljector fuzz-poc batch-verify \
+  --run-dir runs/fuzz_poc/flask/<fuzz_poc_run_id>
+```
+
+Artifacts are written under `runs/fuzz_poc/<project>/<run_id>/attempt_XX/` with
+`source_injection_result.json`, generated inputs under `artifacts/exploit_files/`,
+`fuzz_poc_manifest.json`, `fuzz_poc.py`, and `verification_result.json`.
+
+### `fuzz-guided-poc`
+
+Metadata-first variant of `fuzz-poc`. Instead of inferring everything from the patch,
+it trusts the `fuzz_native` selector metadata first: preferred harness, likely format
+family, bug shape, seed-template hints, and alternate fuzzer fallbacks.
+
+```bash
+uv run vuljector fuzz-guided-poc batch \
+  --source-run-dir runs/injection/flask/<run_id>
+```
+
+Artifacts are written under `runs/fuzz_poc_guided/<project>/<run_id>/...`, with the
+same attempt-oriented structure plus a run-level `verification_summary.json` when
+inline verification is enabled.
+
+### Fuzzing Utilities
+
+Operational helpers for these flows live in `scripts/fuzzing/`, including:
+
+- `test_fuzz_native_pipeline.sh` for an end-to-end smoke path
+- `review_fuzz_guided_candidates.py` for compact selector review tables
+- `triage_fuzz_hot_paths.py` for cheap hot-path bucketing on injection outputs
+- metadata mining and harness-mapping helpers for offline analysis
+
+## Rex Triage
+
+`rex-triage` prepares successful replay-backed crash cases for downstream Rex work.
+It scans a source run for attempts whose verification already succeeded, stages the
+trigger input and vulnerable binary context, tries direct replay plus stdin-compatible
+adapter routes, and records whether the case is suitable for Rex handoff.
+
+```bash
+uv run vuljector rex-triage batch \
+  --source-run-dir runs/fuzz_poc/flask/<run_id>
+```
+
+Outputs live under `runs/rex_triage/<project>/<run_id>/attempt_XX/` and include:
+
+- replay logs
+- any generated stdin adapter binary
+- Rex input/binary staging artifacts
+- a run-level `run_summary.json` with prepared, skipped, and Rex-success counts
 
 ## CVE Report (Phase 4)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -18,6 +19,10 @@ from vuljector.core import build_runtime, ensure_setup_completed, load_project_c
 from vuljector.io_contracts import SelectionCandidate, VerificationResult, utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+
+def _vuln_only_mode() -> bool:
+    return (os.environ.get("VULJECTOR_INJECTION_MODE") or "").strip().lower() == "vuln_only"
 
 
 def _model_run_suffix(model_id: str) -> str:
@@ -34,6 +39,9 @@ def run_injection(
     candidates_file: str,
     num_vulnerabilities: int = 1,
     debug: bool = False,
+    auto_fuzz_poc: bool = False,
+    auto_fuzz_poc_exploit_timeout: int = 600,
+    auto_fuzz_poc_max_total_time: int = 90,
     on_run_initialized: Callable[[dict], None] | None = None,
 ) -> dict:
     config = load_project_config(project)
@@ -110,20 +118,62 @@ def run_injection(
             debug=debug,
             attempt_dir=f"attempt_{attempt_idx:02d}",
         )
-        injection_result = strategy.run(runtime, request, candidate)
+        try:
+            injection_result = strategy.run(runtime, request, candidate)
+        except Exception as exc:
+            logger.exception("[%s] injection crashed on attempt %d", project, attempt_idx)
+            injection_result = _verification_as_injection_failure(
+                project=project,
+                run_id=run_id,
+                candidate=candidate,
+                strategy_id=strategy.id,
+                model_id=model_id,
+                failure_cause="injection_exception",
+                failure_message=_exception_message(exc),
+            )
         write_json(attempt_dir / "injection_result.json", injection_result.to_dict())
 
         verification_result: VerificationResult
 
-        if injection_result.status == "success":
-            verification_result = _verify_attempt(
-                runtime=runtime,
-                config=config,
+        if injection_result.status == "success" and not _vuln_only_mode():
+            try:
+                verification_result = _verify_attempt(
+                    runtime=runtime,
+                    config=config,
+                    project=project,
+                    run_id=run_id,
+                    attempt_idx=attempt_idx,
+                    attempt_dir=attempt_dir,
+                    injection_result=injection_result,
+                )
+            except Exception as exc:
+                logger.exception("[%s] verification handoff crashed on attempt %d", project, attempt_idx)
+                verification_result = VerificationResult(
+                    project=project,
+                    run_id=run_id,
+                    timestamp_utc=utc_now_iso(),
+                    status="failure",
+                    checks={
+                        "unit_tests": "unknown",
+                        "exploit_on_vulnerable": "unknown",
+                        "exploit_on_secure": "unknown",
+                    },
+                    failure_cause="verification_exception",
+                    failure_message=_exception_message(exc),
+                )
+        elif injection_result.status == "success":
+            verification_result = VerificationResult(
                 project=project,
                 run_id=run_id,
-                attempt_idx=attempt_idx,
-                attempt_dir=attempt_dir,
-                injection_result=injection_result,
+                timestamp_utc=utc_now_iso(),
+                status="success",
+                checks={
+                    "unit_tests": "skipped",
+                    "exploit_on_vulnerable": "skipped",
+                    "exploit_on_secure": "skipped",
+                },
+                failure_cause=None,
+                failure_message="vuln_only_mode",
             )
         else:
             verification_result = VerificationResult(
@@ -141,7 +191,7 @@ def run_injection(
             )
         write_json(attempt_dir / "verification_result.json", verification_result.to_dict())
 
-        should_persist = verification_result.status == "success" or debug
+        should_persist = (verification_result.status == "success" and not _vuln_only_mode()) or debug
         if should_persist:
             vuln_dir, vulnerability_id = _dataset_vuln_dir(project, verification_result.status, debug)
             vuln_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +215,8 @@ def run_injection(
             if verification_result.status == "success":
                 successes += 1
                 vulnerability_ids.append(vulnerability_id)
+        elif _vuln_only_mode() and injection_result.status == "success":
+            vulnerability_id = ""
         else:
             vulnerability_id = ""
 
@@ -196,6 +248,12 @@ def run_injection(
         "vulnerability_id": vulnerability_ids[-1] if vulnerability_ids else "",
         "run_dir": str(run_dir),
     }
+    if auto_fuzz_poc and not _vuln_only_mode():
+        payload["posthoc_fuzz_poc"] = _run_posthoc_fuzz_poc(
+            run_dir=run_dir,
+            exploit_timeout=auto_fuzz_poc_exploit_timeout,
+            max_total_time=auto_fuzz_poc_max_total_time,
+        )
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
     (run_dir / "logs" / "run.log").write_text("injection completed\n", encoding="utf-8")
     write_json(run_dir / "run_summary.json", payload)
@@ -205,18 +263,18 @@ def run_injection(
 def _verify_attempt(*, runtime, config, project: str, run_id: str, attempt_idx: int, attempt_dir: Path, injection_result) -> VerificationResult:
     artifacts = injection_result.artifacts or {}
     patch_diff = artifacts.get("patch_diff", "")
-    exploit_filename = artifacts.get("exploit_filename", "attack.py")
     exploit_dir = attempt_dir / "artifacts" / "exploit_files"
-    exploit_host_path = exploit_dir / exploit_filename
     exploit_wrapper_path = exploit_dir / "exploit.sh"
     if not patch_diff:
         raise RuntimeError("Verification requested without patch_diff.")
-    if not exploit_host_path.exists() or not exploit_wrapper_path.exists():
+    if not exploit_wrapper_path.exists():
         raise RuntimeError(f"Missing exploit files in {exploit_dir}")
 
     session = runtime.new_session(run_mount_dir=attempt_dir)
     try:
-        session.copy_to(exploit_host_path, f"/tmp/{exploit_filename}")
+        session.exec("rm -rf /tmp/exploit && mkdir -p /tmp/exploit")
+        session.copy_to(exploit_dir, "/tmp/exploit")
+        session.exec("find /tmp/exploit -maxdepth 1 -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true")
         session.copy_to(exploit_wrapper_path, "/tmp/exploit.sh")
         session.exec("chmod +x /tmp/exploit.sh")
         verification_result = run_verification(
@@ -237,7 +295,32 @@ def _verify_attempt(*, runtime, config, project: str, run_id: str, attempt_idx: 
 
 def _rebuild_command(runtime) -> str | None:
     language = getattr(runtime, "language", None) or "c++"
-    return f"FUZZING_LANGUAGE={language} compile"
+    engine = getattr(runtime, "fuzzing_engine", None) or "libfuzzer"
+    return f"FUZZING_LANGUAGE={language} FUZZING_ENGINE={engine} compile"
+
+
+def _run_posthoc_fuzz_poc(*, run_dir: Path, exploit_timeout: int, max_total_time: int) -> dict:
+    from vuljector.run_fuzz_poc import batch_generate_fuzz_poc_filtered
+
+    try:
+        summary = batch_generate_fuzz_poc_filtered(
+            source_run_dir=run_dir,
+            tag=run_dir.name,
+            max_total_time=max_total_time,
+            exploit_timeout=exploit_timeout,
+        )
+        return {
+            "status": "success",
+            "generated_run_dir": summary.get("generated_run_dir"),
+            "verification": summary.get("verification"),
+        }
+    except Exception as exc:
+        logger.exception("post-hoc fuzz-poc batch failed for %s", run_dir)
+        return {
+            "status": "failure",
+            "failure_cause": "posthoc_fuzz_poc_exception",
+            "failure_message": _exception_message(exc),
+        }
 
 
 def _selection_run_id_from_candidates(path: str) -> str:
@@ -291,3 +374,46 @@ def _write_vulnerability_metadata(
         "secure_base_commit": secure_base_commit,
     }
     write_json(vulnerability_dir / "vulnerability_metadata.json", payload)
+
+
+def _verification_as_injection_failure(
+    *,
+    project: str,
+    run_id: str,
+    candidate: SelectionCandidate,
+    strategy_id: str,
+    model_id: str,
+    failure_cause: str,
+    failure_message: str,
+):
+    from vuljector.io_contracts import InjectionResult
+
+    return InjectionResult(
+        project=project,
+        run_id=run_id,
+        timestamp_utc=utc_now_iso(),
+        status="failure",
+        selected_candidate_id=candidate.candidate_id,
+        cwe_group=candidate.cwe_group,
+        cwe_id=candidate.cwe_id,
+        strategy={
+            "id": strategy_id,
+            "model_id": model_id,
+            "retries": 0,
+            "selection_candidate": candidate.to_dict(),
+        },
+        usage={
+            "total_steps": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "models_used": [model_id],
+        },
+        paths={},
+        artifacts={},
+        failure={"cause": failure_cause, "message": failure_message},
+    )
+
+
+def _exception_message(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__

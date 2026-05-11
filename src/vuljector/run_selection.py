@@ -29,7 +29,12 @@ def run_selection(
     runtime = build_runtime(config)
     ensure_setup_completed(runtime, project)
 
-    _max = max_candidates if max_candidates is not None else _DEFAULT_MAX_CANDIDATES
+    if max_candidates is not None:
+        _max = max_candidates
+    elif strategy_id == "fuzz_guided":
+        _max = None
+    else:
+        _max = _DEFAULT_MAX_CANDIDATES
 
     run_id = new_run_id("selection")
     run_dir = selection_run_dir(project, run_id)

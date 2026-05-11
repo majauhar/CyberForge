@@ -14,6 +14,8 @@
 *.sln.docstates
 *.env
 .venv/
+/.tmp_run_*
+/test_results_*/
 runs/
 scripts/eval_vuljector/evals/
 scripts/eval_vuljector/figures/

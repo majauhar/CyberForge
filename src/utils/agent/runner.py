@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -161,14 +162,24 @@ def run_agent_task(
 
         # ── Extract files from container (always — even if agent didn't submit) ─
         extracted: dict[str, str] = {}
+        extracted_dirs: dict[str, str] = {}
         for path in request.extract_paths:
-            out = docker_env.execute({"command": f"cat {path}"}, timeout=30)
+            out = docker_env.execute({"command": _extract_command(path)}, timeout=60)
             if out.get("returncode") == 0:
-                extracted[path] = out.get("output", "")
-                logging.info(
-                    "[%s] Extracted %s (%d bytes)",
-                    runtime.project, path, len(extracted[path]),
-                )
+                output = out.get("output", "")
+                if output.startswith("__VULJECTOR_DIR__\n"):
+                    payload = output.split("\n", 1)[1]
+                    extracted_dirs[path] = payload
+                    logging.info(
+                        "[%s] Extracted directory %s (%d base64 chars)",
+                        runtime.project, path, len(payload),
+                    )
+                else:
+                    extracted[path] = output
+                    logging.info(
+                        "[%s] Extracted %s (%d bytes)",
+                        runtime.project, path, len(extracted[path]),
+                    )
             else:
                 logging.warning(
                     "[%s] Could not extract %s: %s",
@@ -182,6 +193,7 @@ def run_agent_task(
                 stderr=f"Agent did not submit output (exit_status={exit_status})",
                 messages=messages,
                 extracted_files=extracted,
+                extracted_dirs=extracted_dirs,
                 post_results=post_results,
                 exit_status=exit_status,
                 total_steps=n_steps,
@@ -193,6 +205,7 @@ def run_agent_task(
             stderr="",
             messages=messages,
             extracted_files=extracted,
+            extracted_dirs=extracted_dirs,
             post_results=post_results,
             exit_status=exit_status,
             total_steps=n_steps,
@@ -217,6 +230,20 @@ def _normalize_litellm_model_name(model_id: str) -> str:
     if "/" not in model_id:
         return "openai/" + model_id
     return model_id
+
+
+def _extract_command(path: str) -> str:
+    quoted_path = shlex.quote(path)
+    return (
+        f"if [ -d {quoted_path} ]; then "
+        "printf '__VULJECTOR_DIR__\\n'; "
+        f"tar -C {quoted_path} -czf - . | base64 | tr -d '\\n'; "
+        f"elif [ -f {quoted_path} ]; then "
+        f"cat {quoted_path}; "
+        "else "
+        "exit 1; "
+        "fi"
+    )
 
 
 def _collect_agent_env(request: AgentRequest) -> dict[str, str]:

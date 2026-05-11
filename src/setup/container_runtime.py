@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from setup.dockerhub_image import pull_ready_image
+from setup.dockerhub_image import dockerhub_image_matches_engine, pull_ready_image
 from setup.mounts import RUN_MOUNT_POINT
 
 HARNESS_DIR = "/workspace/run/unit_tests"
@@ -134,6 +134,7 @@ class ContainerRuntime:
         secure_base_commit: str,
         workspace_dir: Path,
         main_repo_url: str = "",
+        fuzzing_engine: str = "libfuzzer",
         dockerhub_image: str | None = None,
         language: str | None = None,
     ) -> None:
@@ -143,6 +144,7 @@ class ContainerRuntime:
         self.secure_base_commit = secure_base_commit
         self.workspace_dir = workspace_dir
         self.main_repo_url = main_repo_url
+        self.fuzzing_engine = fuzzing_engine
         self.dockerhub_image = dockerhub_image
         self.language = language
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -156,9 +158,10 @@ class ContainerRuntime:
 
     @property
     def ready_image_tag(self) -> str:
-        return f"vuljector/{self.project}:{self.setup_hash[:12]}-ready"
+        return f"vuljector/{self.project}:{self.setup_hash[:12]}-{self._engine_tag()}-ready"
 
     def has_ready_image(self) -> bool:
+        self._adopt_legacy_ready_image()
         return self.meta.get("ready_hash") == self.setup_hash and self._image_exists(self.ready_image_tag)
 
     def ready_image_is_valid(self) -> bool:
@@ -193,6 +196,7 @@ class ContainerRuntime:
 
 
     def ensure_setup_image(self) -> None:
+        self._adopt_legacy_setup_image()
         setup_image_tag = self._setup_image_tag()
         if self.meta.get("setup_hash") != self.setup_hash or not self._image_exists(setup_image_tag):
             self._build_image(setup_image_tag)
@@ -249,7 +253,10 @@ class ContainerRuntime:
             session.exec("git clean -fdx", workdir=self.repo_dir_in_container).raise_for_status("git clean failed")
             build_result = session.exec(
                 "compile",
-                env={"FUZZING_LANGUAGE": self.language or "c++"},
+                env={
+                    "FUZZING_LANGUAGE": self.language or "c++",
+                    "FUZZING_ENGINE": self.fuzzing_engine,
+                },
                 timeout=1800,
             )
             if build_result.returncode != 0:
@@ -279,7 +286,7 @@ class ContainerRuntime:
     def ensure_ready_image(self, *, unit_tests_dir: Path) -> str:
         if self.ready_image_is_valid():
             return self.ready_image_tag
-        if self.dockerhub_image:
+        if self.dockerhub_image and dockerhub_image_matches_engine(self.dockerhub_image, self.fuzzing_engine):
             pull_ready_image(source_image=self.dockerhub_image, target_image=self.ready_image_tag)
             self.meta["setup_hash"] = self.setup_hash
             self.meta["ready_hash"] = self.setup_hash
@@ -372,7 +379,34 @@ class ContainerRuntime:
             raise RuntimeError(f"docker build failed: {(result.stderr or result.stdout).strip()}")
 
     def _setup_image_tag(self) -> str:
+        return f"vuljector/{self.project}:{self.setup_hash[:12]}-{self._engine_tag()}"
+
+    def _engine_tag(self) -> str:
+        return self.fuzzing_engine.replace("+", "plus")
+
+    def _legacy_ready_image_tag(self) -> str:
+        return f"vuljector/{self.project}:{self.setup_hash[:12]}-ready"
+
+    def _legacy_setup_image_tag(self) -> str:
         return f"vuljector/{self.project}:{self.setup_hash[:12]}"
+
+    def _adopt_legacy_ready_image(self) -> None:
+        if self.fuzzing_engine != "libfuzzer":
+            return
+        if self._image_exists(self.ready_image_tag):
+            return
+        legacy = self._legacy_ready_image_tag()
+        if self._image_exists(legacy):
+            self._tag_image(legacy, self.ready_image_tag)
+
+    def _adopt_legacy_setup_image(self) -> None:
+        if self.fuzzing_engine != "libfuzzer":
+            return
+        if self._image_exists(self._setup_image_tag()):
+            return
+        legacy = self._legacy_setup_image_tag()
+        if self._image_exists(legacy):
+            self._tag_image(legacy, self._setup_image_tag())
 
     @staticmethod
     def _image_exists(image_tag: str) -> bool:
@@ -386,6 +420,10 @@ class ContainerRuntime:
     @staticmethod
     def _delete_image(image_tag: str) -> None:
         subprocess.run(["docker", "image", "rm", "-f", image_tag], capture_output=True, text=True)
+
+    @staticmethod
+    def _tag_image(source_image: str, target_image: str) -> None:
+        subprocess.run(["docker", "tag", source_image, target_image], check=True, capture_output=True, text=True)
 
     def _load_meta(self) -> dict:
         if not self.meta_path.exists():

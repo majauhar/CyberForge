@@ -1,7 +1,10 @@
 # scripts/
 
-Offline utilities for preparing project lists before running the Vuljector pipeline.
-Nothing here requires a running container or API key.
+Offline utilities and operational helpers for preparing, analyzing, and
+manually exercising the Vuljector pipeline.
+
+Most scripts do not require a running container or API key. Fuzzing/manual
+helpers are grouped separately under `scripts/fuzzing/`.
 
 ---
 
