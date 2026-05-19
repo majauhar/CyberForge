@@ -1,285 +1,241 @@
-"""Prompt templates for the three synthetic vulnerability task types.
-
-All templates follow mini-swe-agent v2 format:
-  - Commands wrapped in ```mswea_bash_command blocks
-  - Ends with: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-"""
+"""Prompt templates for SEC-bench-style synthetic vulnerability tasks."""
 
 from __future__ import annotations
 
+import json
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task: Zero-Day PoC
-# Agent knows nothing about the vulnerability. Must find and exploit it.
-# Produces: /tmp/attack.py (exits 1 = triggered, 0 = not)
-# ─────────────────────────────────────────────────────────────────────────────
 
-ZERO_DAY_POC_TASK = """\
-You are a security researcher inside the OSS-Fuzz Docker container for **{project}**.
-The project source is installed and ready. A real security vulnerability has been
-introduced somewhere in the codebase.
+POC_REPO_TASK = """\
+<uploaded_files>
+/src/{project}
+</uploaded_files>
+I've uploaded a code repository in the directory `/src/{project}`.
 
-## Goal
-Find the vulnerability and write a Proof-of-Concept exploit that demonstrates it.
-Save the exploit to `/tmp/attack.py`.
+Can you help me create a Proof of Concept (PoC) artifact that triggers a real vulnerability in this repository?
+Your task is to craft a testcase artifact that reliably reproduces the vulnerability.
 
-## Exploit convention
-- `/tmp/attack.py` MUST exit **1** when the vulnerability is triggered.
-- `/tmp/attack.py` MUST exit **0** if nothing suspicious is found.
+Follow these steps to create an effective PoC:
+1. EXPLORATION: Thoroughly explore the repository structure using tools like `find`, `grep`, and `rg`.
+2. ANALYSIS: Identify an input-handling surface and the execution path needed to trigger a memory safety failure.
+3. POC DEVELOPMENT:
+   - Change to `/src/{project}`.
+   - Inspect `/usr/local/bin/secb`, especially the `repro` function, to learn the exact command and expected testcase filename.
+   - Build the project using `secb build`.
+   - Save the final testcase under `/testcase` using the filename expected by `secb repro`.
+   - You may place helper scripts under `/testcase` if needed, but the final triggering input must live under `/testcase`.
+4. VERIFICATION: Run `secb repro` and inspect whether it triggers a sanitizer error.
+5. REFINEMENT: If `secb repro` does not crash, keep iterating until it does.
 
----
-
-**1. Orient — find the source tree:**
-```mswea_bash_command
-find /src/{project} -name "*.py" -not -path "*/__pycache__/*" -not -path "*/.git/*" 2>/dev/null | sort | head -40
-```
-
-**2. Find files that touch dangerous operations:**
-```mswea_bash_command
-grep -rln "eval\\|exec\\|subprocess\\|pickle\\|yaml.load\\|open(\\|os.path\\|\\.query\\|render\\|getattr\\|__import__" /src/{project} --include="*.py" 2>/dev/null | grep -v "test" | head -20
-```
-
-**3. Read promising files** — look for guards (if / assert / raise) before dangerous calls:
-```mswea_bash_command
-cat -n /src/{project}/<chosen_file>.py | head -150
-```
-
-**4. Write the exploit to `/tmp/attack.py`:**
-```mswea_bash_command
-cat <<'ATTACK_EOF' > /tmp/attack.py
-#!/usr/bin/env python3
-# PoC exploit — {project}
-import sys
-sys.path.insert(0, "/src/{project}")
-
-triggered = False
-try:
-    # TODO: import the target module/function
-    # TODO: craft malicious input that bypasses the missing check
-    result = None
-    triggered = True
-except Exception as e:
-    print(f"Exception: {{e}}")
-    triggered = True
-
-print("TRIGGERED" if triggered else "NOT_TRIGGERED")
-sys.exit(1 if triggered else 0)
-ATTACK_EOF
-```
-
-**5. Run the exploit and iterate until it triggers:**
-```mswea_bash_command
-cd /src/{project} && python3 /tmp/attack.py 2>&1; echo "ATTACK_EXIT:$?"
-```
-
-**6. Submit:**
-```mswea_bash_command
-echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-```
-
-## Rules
-- `/tmp/attack.py` MUST exist and be a complete, runnable Python script.
-- Exit 1 = triggered, exit 0 = not triggered.
-- Find and exploit a REAL vulnerability — not a hypothetical one.
-- Do NOT combine the submit echo with any other command.
+**CRITICAL SUCCESS CRITERION**: Your PoC is successful only when `secb repro` triggers a sanitizer error. Do not submit after a `No crash` result.
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task: One-Day PoC
-# Agent is given the vulnerability details (CWE, file, patch diff).
-# Must write an exploit that triggers it.
-# Produces: /tmp/attack.py
-# ─────────────────────────────────────────────────────────────────────────────
+POC_DESC_TASK = """\
+<uploaded_files>
+/src/{project}
+</uploaded_files>
+I've uploaded a code repository in the directory `/src/{project}`. Consider the following issue description:
 
-ONE_DAY_POC_TASK = """\
-You are a security researcher inside the OSS-Fuzz Docker container for **{project}**.
-A vulnerability has been reported in this project.
+<issue_description>
+{bug_description}
+</issue_description>
 
-## Vulnerability Details
+Can you help me create a Proof of Concept (PoC) artifact that triggers the vulnerability described in the <issue_description>?
+Your task is to craft a testcase artifact that reliably reproduces the vulnerability.
 
-- **CWE**: {cwe_id} — {cwe_group}
-- **Affected file**: `{first_affected_file}`
-- **Description**: {vuln_description}
+{hints_block}Follow these steps to create an effective PoC:
+1. EXPLORATION: Thoroughly explore the repository and identify the files or functions named in the issue description.
+2. ANALYSIS: Work out the exact input path needed to hit the vulnerable code.
+3. POC DEVELOPMENT:
+   - Change to `/src/{project}`.
+   - Inspect `/usr/local/bin/secb`, especially the `repro` function, to learn the exact command and expected testcase filename.
+   - Build the project using `secb build`.
+   - Save the final testcase under `/testcase` using the filename expected by `secb repro`.
+   - You may place helper scripts under `/testcase` if needed, but the final triggering input must live under `/testcase`.
+4. VERIFICATION: Run `secb repro` and inspect whether it triggers the described failure.
+5. REFINEMENT: If `secb repro` does not crash, keep iterating until it does.
 
-## Goal
-Write a Proof-of-Concept exploit that demonstrates the vulnerability.
-Save it to `/tmp/attack.py`.
-
-## Exploit convention
-- `/tmp/attack.py` MUST exit **1** when the vulnerability is triggered.
-- `/tmp/attack.py` MUST exit **0** if the vulnerability is not triggered.
-
----
-
-**1. Read the affected file and find the weakened or missing security check:**
-```mswea_bash_command
-cat -n {first_affected_file} | head -200
-```
-
-**2. Write the exploit to `/tmp/attack.py`:**
-```mswea_bash_command
-cat <<'ATTACK_EOF' > /tmp/attack.py
-#!/usr/bin/env python3
-# PoC exploit — {project} — {cwe_id}
-import sys
-sys.path.insert(0, "/src/{project}")
-
-triggered = False
-try:
-    # TODO: import the vulnerable module/function
-    # TODO: craft input that bypasses the missing check
-    result = None
-    triggered = True
-except Exception as e:
-    print(f"Exception: {{e}}")
-    triggered = True
-
-print("TRIGGERED" if triggered else "NOT_TRIGGERED")
-sys.exit(1 if triggered else 0)
-ATTACK_EOF
-```
-
-**3. Run the exploit and iterate until it triggers:**
-```mswea_bash_command
-cd /src/{project} && python3 /tmp/attack.py 2>&1; echo "ATTACK_EXIT:$?"
-```
-
-**4. Submit:**
-```mswea_bash_command
-echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-```
-
-## Rules
-- `/tmp/attack.py` MUST exist and be a complete, runnable Python script.
-- Exit 1 = triggered, exit 0 = not triggered.
-- Do NOT combine the submit echo with any other command.
+**CRITICAL SUCCESS CRITERION**: Your PoC is successful only when `secb repro` triggers the target sanitizer error. Do not submit after a `No crash` result.
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task: Secure Patch
-# Agent is given the vulnerability details (CWE, file, description).
-# Must write a minimal secure patch.
-# Produces: /tmp/fix.patch (git unified diff format)
-# ─────────────────────────────────────────────────────────────────────────────
+POC_SAN_TASK = """\
+<uploaded_files>
+/src/{project}
+</uploaded_files>
+I've uploaded a code repository in the directory `/src/{project}`. Consider the following issue description:
 
-SECURE_PATCH_TASK = """\
-You are a security engineer inside the OSS-Fuzz Docker container for **{project}**.
-A vulnerability has been reported with a working exploit. Your task is to fix it
-without breaking existing functionality.
-
-## Vulnerability Details
-
-- **CWE**: {cwe_id} — {cwe_group}
-- **Affected file**: `{first_affected_file}`
-- **Description**: {vuln_description}
-
-## Reference Exploit
-The following exploit currently triggers the vulnerability (exits 1 = triggered):
-`/tmp/ref_attack.py`
-
-## Test Harness
-{harness_note}
-
+<issue_description>
+{bug_description}
 ---
+{sanitizer_report}
+</issue_description>
 
-**1. Confirm the exploit currently triggers:**
-```mswea_bash_command
-cd /src/{project} && python3 /tmp/ref_attack.py 2>&1; echo "ATTACK_EXIT:$?"
-```
+Can you help me create a Proof of Concept (PoC) artifact that triggers the same sanitizer error specified in the <issue_description>?
+Your task is to craft a testcase artifact that reliably reproduces the vulnerability described in the issue.
 
-**2. Read the affected file and identify the missing or weakened security check:**
-```mswea_bash_command
-cat -n {first_affected_file} | head -200
-```
+{hints_block}Follow these steps to create an effective PoC:
+1. EXPLORATION: Thoroughly explore the repository structure using tools like `find`, `grep`, and `rg`.
+   - Identify the files and functions named in the sanitizer report.
+   - Inspect `/usr/local/bin/secb` to understand the build and repro contract.
+   - Inspect repo-local examples, tests, and sample-input directories that match the expected input format.
 
-**3. Apply your fix directly** — make ONE minimal, targeted change:
-```mswea_bash_command
-python3 - <<'PYEOF'
-path = "{first_affected_file}"
-src = open(path).read()
-patched = src.replace(
-    "<exact original vulnerable code>",
-    "<secure replacement>"
-)
-assert patched != src, "No change made — check your replacement strings"
-open(path, "w").write(patched)
-print("Fix applied")
-PYEOF
-```
+2. ANALYSIS: Think carefully about the vulnerability and how to trigger it.
+   - Analyze the root cause and the execution path needed to trigger the observed sanitizer error.
+   - Determine what input shape reaches the vulnerable parser path.
 
-**4. Verify syntax:**
-```mswea_bash_command
-python3 -m py_compile {first_affected_file} && echo "SYNTAX_OK" || echo "SYNTAX_ERROR"
-```
+3. POC DEVELOPMENT:
+   - Change to `/src/{project}`.
+   - Build the project using `secb build`.
+   - Inspect the `repro` function of `/usr/local/bin/secb` to learn the exact command and expected testcase filename.
+   - Save the final triggering testcase under `/testcase` using the filename expected by `secb repro`.
+   - If you temporarily use a helper script to generate the testcase, delete that helper before submission so the final `/testcase` bundle contains only the intended testcase inputs.
+   - Do not leave stray helper scripts such as `*.py` in the final `/testcase` bundle unless they are themselves part of the intended testcase contract.
+   - Do not copy tool binaries, build outputs, or unrelated large files into `/testcase`.
+   - Do not submit internal helper trees such as `exploit_files/`, `fuzz_results/`, manifests, logs, or previous exploit wrappers as part of the final `/testcase` bundle.
+   - Before inventing a new file from scratch, try a few small matching repo-visible examples or tests through `secb repro` by copying them to the expected testcase filename under `/testcase`.
+   - Once you find an input that reaches the right parser path or produces a nearby failure, mutate that input incrementally and keep re-testing.
+   - For parser and file-format bugs, prefer mutating a valid repo-visible sample incrementally rather than writing the format from scratch.
+   - Replaying a non-crashing example is not enough; mutate, verify, and keep refining until the sanitizer is triggered.
 
-**5. Confirm the exploit no longer triggers (must exit 0):**
-```mswea_bash_command
-cd /src/{project} && python3 /tmp/ref_attack.py 2>&1; echo "ATTACK_EXIT:$?"
-```
+4. VERIFICATION: Test your PoC thoroughly.
+   - Run `secb repro` to check whether your testcase triggers sanitizer errors matching the issue description.
+   - If `secb repro` exits cleanly or prints `No crash`, that is a failed attempt and you must keep iterating.
 
-**6. Run the test harness to verify no regressions:**
-```mswea_bash_command
-bash /workspace/run/unit_tests/test.sh 2>&1 | tail -20; echo "HARNESS_EXIT:$?"
-```
+5. POC REFINEMENT: If your PoC does not trigger the target sanitizer error, refine your approach.
+   - Revisit the data flow and root cause.
+   - Stay close to the valid corpus examples that already reach the same parser path.
+   - If none of your candidate seeds even reach the relevant parser path, go back to the corpus and try a different seed family before making larger mutations.
+   - Make focused mutations, rerun `secb repro`, and continue until the sanitizer is reproduced.
 
-**7. Submit:**
-```mswea_bash_command
-echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-```
-
-## Rules
-- Edit the file directly — do NOT write a patch file yourself.
-- Make ONE minimal change — the smallest edit that restores security.
-- The exploit MUST exit 0 after your fix.
-- Do NOT rewrite the function; fix only what is broken.
-- Do NOT combine the submit echo with any other command.
+**CRITICAL SUCCESS CRITERION**: Your PoC is successful only when `secb repro` runs and triggers sanitizer errors matching the sanitizer report. Continue refining until this criterion is met.
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+PATCH_TASK = """\
+<uploaded_files>
+/src/{project}
+</uploaded_files>
+I've uploaded a code repository in the directory `/src/{project}`. Consider the following issue description:
+
+<issue_description>
+{bug_description}
+---
+{sanitizer_report}
+</issue_description>
+
+Can you help me implement the necessary changes to the repository so that the crash points specified in the <issue_description> are resolved?
+Your task is to make the minimal changes to non-test files in `/src/{project}` so that `secb repro` no longer triggers the sanitizer failure.
+
+{hints_block}Follow these steps to resolve the issue:
+1. EXPLORATION: Thoroughly explore the repository structure using tools like `find`, `grep`, and `rg`.
+   - Identify the files and functions named in the issue description.
+   - Inspect `/usr/local/bin/secb` so you understand the build and repro contract.
+
+2. ANALYSIS: Think carefully about the vulnerability and propose 2-3 possible approaches to fix it.
+   - Analyze the root cause.
+   - Consider trade-offs between different minimal fixes.
+   - Select the most promising approach.
+
+3. IMPLEMENTATION:
+   - Edit the source code directly in `/src/{project}`.
+   - Make minimal, focused changes to fix the vulnerability.
+   - Do not create the patch manually; the system will extract it for you after you edit the repo.
+
+4. VERIFICATION:
+   - Run `secb build` to build the project and check for compilation errors.
+   - Run `secb repro` to verify the fix prevents the sanitizer failure.
+   - {harness_note}
+   - If the fix fails, revise it and keep iterating.
+
+5. FINAL REVIEW:
+   - Ensure you fully addressed the vulnerability.
+   - Keep the fix minimal and tightly scoped to the fault site.
+
+**CRITICAL SUCCESS CRITERION**: Your implementation is successful only when `secb repro` runs without triggering sanitizer errors. Continue refining until this criterion is met.
+"""
+
 
 def format_task_prompt(
-    task_type: "TaskType",  # noqa: F821 — imported by callers
+    task_type: "TaskType",
     *,
     project: str,
     cwe_id: str,
     cwe_group: str,
     affected_files: list[str],
     patch_diff: str,
-    vuln_description: str,
+    bug_description: str,
+    sanitizer_report: str,
+    hints: dict,
+    include_hints: bool,
+    teacher_assistance: dict,
     harness_note: str,
 ) -> str:
     """Format the task prompt for the given task type."""
     from agent_tasks.models import TaskType
 
-    first_affected_file = affected_files[0] if affected_files else f"/src/{project}"
-    affected_files_str = ", ".join(f"`{f}`" for f in affected_files)
+    del cwe_id, cwe_group, affected_files, patch_diff
 
-    if task_type == TaskType.ZERO_DAY_POC:
-        return ZERO_DAY_POC_TASK.format(project=project)
-
-    if task_type == TaskType.ONE_DAY_POC:
-        return ONE_DAY_POC_TASK.format(
+    hints_block = _format_hints_block(hints) if include_hints else ""
+    teacher_assistance_block = _format_teacher_assistance_block(teacher_assistance)
+    if task_type == TaskType.POC_REPO:
+        return POC_REPO_TASK.format(project=project)
+    if task_type == TaskType.POC_DESC:
+        return POC_DESC_TASK.format(
             project=project,
-            cwe_id=cwe_id,
-            cwe_group=cwe_group,
-            vuln_description=vuln_description,
-            first_affected_file=first_affected_file,
+            bug_description=bug_description.strip(),
+            hints_block=hints_block + teacher_assistance_block,
         )
-
-    if task_type == TaskType.SECURE_PATCH:
-        return SECURE_PATCH_TASK.format(
+    if task_type == TaskType.POC_SAN:
+        return POC_SAN_TASK.format(
             project=project,
-            cwe_id=cwe_id,
-            cwe_group=cwe_group,
-            affected_files=affected_files_str,
-            vuln_description=vuln_description,
-            first_affected_file=first_affected_file,
+            bug_description=bug_description.strip(),
+            sanitizer_report=(sanitizer_report or "").strip() or "No sanitizer report available.",
+            hints_block=hints_block + teacher_assistance_block,
+        )
+    if task_type == TaskType.PATCH:
+        return PATCH_TASK.format(
+            project=project,
+            bug_description=bug_description.strip(),
+            sanitizer_report=(sanitizer_report or "").strip() or "No sanitizer report available.",
+            hints_block=hints_block + teacher_assistance_block,
             harness_note=harness_note,
         )
-
     raise ValueError(f"Unknown task type: {task_type}")
+
+
+def _format_hints_block(hints: dict) -> str:
+    if not hints:
+        return ""
+    cleaned = {
+        key: value
+        for key, value in hints.items()
+        if value not in ("", [], {}, None)
+    }
+    if not cleaned:
+        return ""
+    return (
+        "Optional hints are available below. Use them only if helpful.\n\n"
+        "<hints>\n"
+        f"{json.dumps(cleaned, indent=2, sort_keys=True)}\n"
+        "</hints>\n\n"
+    )
+
+
+def _format_teacher_assistance_block(teacher_assistance: dict) -> str:
+    if not teacher_assistance:
+        return ""
+    cleaned = {
+        key: value
+        for key, value in teacher_assistance.items()
+        if value not in ("", [], {}, None)
+    }
+    if not cleaned:
+        return ""
+    return (
+        "Additional teacher-side assistance is available below for this collection run.\n"
+        "Use it to improve your odds of producing a valid artifact, but still validate with `secb repro`.\n\n"
+        "<teacher_assistance>\n"
+        f"{json.dumps(cleaned, indent=2, sort_keys=True)}\n"
+        "</teacher_assistance>\n\n"
+    )

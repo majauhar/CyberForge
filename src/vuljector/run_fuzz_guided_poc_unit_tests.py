@@ -11,6 +11,7 @@ from vuljector.run_fuzz_guided_poc import (
     _guided_libfuzzer_options,
     _guided_pick_sequence,
     _pick_guided_fuzzer,
+    batch_generate_guided_fuzz_poc,
 )
 from vuljector.run_fuzz_poc import _infer_trigger_profile
 
@@ -109,6 +110,38 @@ class RunFuzzGuidedPocTests(unittest.TestCase):
         self.assertEqual(manifest["selected_builtin_corpus_members"][0]["archive_member"], "corpus/demo.js")
         self.assertTrue(manifest["generated_input_records"])
         self.assertEqual(payload["selected_builtin_corpus_count"], 1)
+
+    @mock.patch("vuljector.run_fuzz_guided_poc.verify_fuzz_poc_attempt")
+    @mock.patch("vuljector.run_fuzz_guided_poc._guided_pick_sequence")
+    @mock.patch("vuljector.run_fuzz_guided_poc._build_guided_attempt")
+    def test_batch_generate_guided_fuzz_poc_skips_failed_injections(
+        self,
+        mock_build: mock.Mock,
+        mock_pick_sequence: mock.Mock,
+        mock_verify: mock.Mock,
+    ) -> None:
+        failed_attempt = self.root / "attempt_01"
+        failed_attempt.mkdir(parents=True, exist_ok=True)
+        failed_payload = dict(self.payload)
+        failed_payload["status"] = "failure"
+        failed_payload["artifacts"] = {"patch_diff": "", "attack_script": ""}
+        (failed_attempt / "injection_result.json").write_text(json.dumps(failed_payload), encoding="utf-8")
+
+        self.payload["status"] = "success"
+        (self.attempt / "injection_result.json").write_text(json.dumps(self.payload), encoding="utf-8")
+        mock_pick_sequence.return_value = [{"selected": {"fuzzer": "preferred-fuzzer"}}]
+        mock_build.return_value = {"attempt_dir": str(self.root / "generated" / "attempt_00"), "generated": True}
+        mock_verify.return_value = {"status": "failure"}
+
+        summary = batch_generate_guided_fuzz_poc(
+            source_run_dir=self.root,
+            cache_dir=self.root,
+            use_curated_corpus=False,
+        )
+
+        self.assertEqual(len(summary["skipped_source_attempts"]), 1)
+        self.assertIn("skipping injection status failure", summary["skipped_source_attempts"][0]["reason"])
+        mock_build.assert_called_once()
 
 
 if __name__ == "__main__":

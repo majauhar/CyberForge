@@ -20,6 +20,7 @@ from vuljector.run_fuzz_poc import (
     verify_fuzz_poc_attempt,
 )
 from vuljector.run_fuzz_guided_poc import (
+    backfill_guided_success_exports,
     batch_generate_guided_fuzz_poc,
     generate_guided_fuzz_poc,
 )
@@ -27,6 +28,9 @@ from vuljector.run_injection import run_injection
 from vuljector.run_rex_triage import batch_rex_triage
 from vuljector.run_selection import run_selection
 from vuljector.run_setup import run_setup
+from vuljector.run_task_scout import scout_task_instances
+from vuljector.run_teacher_collection import collect_teacher_trajectories
+from vuljector.run_legacy_failed_fuzz_pilot import run_legacy_failed_fuzz_pilot
 
 
 def _split_csv(value: str | None) -> list[str] | None:
@@ -108,15 +112,76 @@ def main() -> None:
     p_at.add_argument("vulnerability_id", help="e.g. vulnerability_0")
     p_at.add_argument(
         "task_type",
-        choices=["zero_day_poc", "one_day_poc", "secure_patch"],
-        help="Task type: zero_day_poc | one_day_poc | secure_patch",
+        help="Task type: patch | poc-repo | poc-desc | poc-san (legacy aliases still accepted)",
     )
     p_at.add_argument("model_id", help="LiteLLM model ID (e.g. claude-sonnet-4-6)")
+    p_at.add_argument("--variant-id", default=None,
+                      help="Bug description variant ID for description-backed task modes (e.g. v1)")
+    p_at.add_argument("--include-hints", action="store_true",
+                      help="Include prepared strong hints in the task prompt")
+
+    p_td = sub.add_parser("task-dataset", help="Export or run SEC-bench-style task dataset rows")
+    td_sub = p_td.add_subparsers(dest="task_dataset_command", required=True)
+
+    p_tde = td_sub.add_parser("export", help="Export variant-expanded dataset rows to JSONL")
+    p_tde.add_argument("project")
+    p_tde.add_argument("--vulnerability-id", default=None,
+                       help="Export only one vulnerability bundle; default exports all")
+    p_tde.add_argument("--model-id", required=True,
+                       help="Model used to synthesize missing bug descriptions")
+    p_tde.add_argument("--output", required=True,
+                       help="Destination JSONL file")
+
+    p_tdr = td_sub.add_parser("run", help="Run one dataset row or filtered subset")
+    p_tdr.add_argument("--dataset-jsonl", required=True)
+    p_tdr.add_argument("--instance-id", default=None)
+    p_tdr.add_argument("--project", default=None)
+    p_tdr.add_argument("--task-mode", default=None)
+    p_tdr.add_argument("--producer", default=None)
+    p_tdr.add_argument("--limit", type=int, default=None)
+    p_tdr.add_argument("--model-id", required=True)
+    p_tdr.add_argument("--include-hints", action="store_true")
 
     p_rep = sub.add_parser("report", help="Show metrics for an injection run")
     p_rep.add_argument("--run-dir", required=True, help="Path to injection run directory")
     p_rep.add_argument("--strategy", default=None,
                        help="Filter by selection strategy (e.g. static_analysis, llm_explore). Default: all.")
+
+    p_scout = sub.add_parser("task-scout", help="Rank exported vulnerabilities for likely task solvability")
+    p_scout.add_argument("--project", default=None, help="Restrict scouting to one project")
+    p_scout.add_argument("--task-modes", default="poc-san,patch",
+                         help="Comma-separated task modes to score (default: poc-san,patch)")
+    p_scout.add_argument("--limit", type=int, default=None,
+                         help="Keep only the top N ranked entries in the summary")
+
+    p_tc = sub.add_parser("teacher-collect", help="Run staged teacher collection on ranked tasks")
+    p_tc.add_argument("project")
+    p_tc.add_argument("--model-id", required=True)
+    p_tc.add_argument("--scout-summary", default=None,
+                      help="Optional scout_summary.json path to drive easy-first candidate selection")
+    p_tc.add_argument("--task-modes", default="poc-san,patch",
+                      help="Comma-separated task modes to run (default: poc-san,patch)")
+    p_tc.add_argument("--regimes", default="faithful,assisted",
+                      help="Comma-separated regimes to try in order")
+    p_tc.add_argument("--limit", type=int, default=10,
+                      help="Maximum ranked candidates to attempt")
+    p_tc.add_argument("--variant-policy", default="deterministic_random",
+                      help="Variant selection: deterministic_random | first | all")
+    p_tc.add_argument("--profile-policy", default="first",
+                      help="Profile selection: first | all")
+    p_tc.add_argument("--regime-retry-limit", type=int, default=3,
+                      help="Maximum retries per regime before escalating")
+    p_tc.add_argument("--no-stop-on-success", action="store_true",
+                      help="Continue into later regimes even after an earlier success")
+    p_tc.add_argument("--diversity", default="standard",
+                      help="Assistance diversity mode: standard | minimal")
+
+    p_lff = sub.add_parser("legacy-failed-fuzz-pilot", help="Run assisted poc-san collection on older failed guided fuzz attempts")
+    p_lff.add_argument("--model-id", required=True)
+    p_lff.add_argument("--limit", type=int, default=10,
+                       help="Number of legacy candidates to run")
+    p_lff.add_argument("--scan-limit", type=int, default=40,
+                       help="How many raw failed attempts to prepare before ranking")
 
     p_fp = sub.add_parser("fuzz-poc", help="Generate and verify fuzz-backed PoC artifacts")
     fp_sub = p_fp.add_subparsers(dest="fuzz_poc_command", required=True)
@@ -184,6 +249,14 @@ def main() -> None:
     p_fgb.add_argument("--no-register-curated-results", action="store_true")
     p_fgb.add_argument("--no-verify", action="store_true")
 
+    p_fgbf = fpgd_sub.add_parser("backfill-exports", help="Export successful historical guided fuzz PoC attempts")
+    p_fgbf.add_argument("--guided-root", default=None,
+                        help="Optional root to scan instead of runs/fuzz_poc_guided")
+    p_fgbf.add_argument("--project", default=None,
+                        help="Restrict backfill to a single project")
+    p_fgbf.add_argument("--limit", type=int, default=None,
+                        help="Maximum number of exports to create")
+
     p_rex = sub.add_parser("rex-triage", help="Prepare and triage successful crash cases for the Rex pilot")
     rex_sub = p_rex.add_subparsers(dest="rex_triage_command", required=True)
 
@@ -218,6 +291,39 @@ def main() -> None:
         from pathlib import Path
         from vuljector.report import show_injection_run
         show_injection_run(Path(args.run_dir).resolve(), strategy_filter=args.strategy)
+        return
+    if args.command == "task-scout":
+        payload = scout_task_instances(
+            project=args.project,
+            task_modes=_split_csv(args.task_modes),
+            limit=args.limit,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if args.command == "teacher-collect":
+        from pathlib import Path
+        payload = collect_teacher_trajectories(
+            project=args.project,
+            model_id=args.model_id,
+            scout_summary_path=Path(args.scout_summary).resolve() if args.scout_summary else None,
+            task_modes=_split_csv(args.task_modes),
+            regimes=_split_csv(args.regimes),
+            limit=args.limit,
+            variant_policy=args.variant_policy,
+            profile_policy=args.profile_policy,
+            regime_retry_limit=args.regime_retry_limit,
+            stop_on_success=not args.no_stop_on_success,
+            diversity=args.diversity,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if args.command == "legacy-failed-fuzz-pilot":
+        payload = run_legacy_failed_fuzz_pilot(
+            model_id=args.model_id,
+            limit=args.limit,
+            scan_limit=args.scan_limit,
+        )
+        print(json.dumps(payload, indent=2))
         return
     if args.command == "fuzz-poc":
         from pathlib import Path
@@ -288,7 +394,7 @@ def main() -> None:
                 top_fuzzers=args.top_fuzzers,
                 use_curated_corpus=not args.no_curated_corpus,
             )
-        else:
+        elif args.fuzz_guided_poc_command == "batch":
             payload = batch_generate_guided_fuzz_poc(
                 source_run_dir=Path(args.source_run_dir).resolve(),
                 tag=args.tag,
@@ -299,6 +405,36 @@ def main() -> None:
                 top_fuzzers=args.top_fuzzers,
                 use_curated_corpus=not args.no_curated_corpus,
                 register_curated_results=not args.no_register_curated_results,
+            )
+        else:
+            payload = backfill_guided_success_exports(
+                guided_root=Path(args.guided_root).resolve() if args.guided_root else None,
+                project=args.project,
+                limit=args.limit,
+            )
+        print(json.dumps(payload, indent=2))
+        return
+    if args.command == "task-dataset":
+        from pathlib import Path
+        from vuljector.run_task_dataset import export_task_dataset_jsonl, run_task_dataset_jsonl
+
+        if args.task_dataset_command == "export":
+            payload = export_task_dataset_jsonl(
+                project=args.project,
+                output_path=Path(args.output).resolve(),
+                model_id=args.model_id,
+                vulnerability_id=args.vulnerability_id,
+            )
+        else:
+            payload = run_task_dataset_jsonl(
+                dataset_jsonl=Path(args.dataset_jsonl).resolve(),
+                model_id=args.model_id,
+                instance_id=args.instance_id,
+                project=args.project,
+                task_mode=args.task_mode,
+                producer=args.producer,
+                limit=args.limit,
+                include_hints=args.include_hints,
             )
         print(json.dumps(payload, indent=2))
         return
@@ -358,6 +494,8 @@ def main() -> None:
                 vulnerability_id=args.vulnerability_id,
                 task_type=args.task_type,
                 model_id=args.model_id,
+                variant_id=args.variant_id,
+                include_hints=args.include_hints,
             )
         elif args.command == "afl-smoke":
             payload = run_afl_smoke(

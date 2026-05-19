@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shutil
 from typing import Any
 
+from agent_tasks.assets import ensure_task_assets, extract_sanitizer_report
+from utils.cwe import resolve_cwe_group
 from utils.json_io import read_json, write_json
-from utils.paths import new_run_id, runs_root
+from utils.paths import fuzz_guided_backfill_run_dir, new_run_id, project_root, runs_root
+from vuljector.core import load_project_config, next_vulnerability_id
 from vuljector.io_contracts import utc_now_iso
 from vuljector.run_fuzz_poc import (
     DEFAULT_CACHE_DIR,
@@ -23,6 +27,7 @@ from vuljector.run_fuzz_poc import (
     _relative_paths_for_attempt,
     _render_exploit_sh,
     _render_fuzz_poc_py,
+    _resolve_patch_diff,
     _retarget_profile_for_fuzzer,
     _sanitize_tag,
     _select_builtin_corpus_members,
@@ -434,7 +439,7 @@ def _build_guided_attempt(
     }
 
     write_json(destination_attempt_dir / "source_injection_result.json", injection)
-    patch_diff = (injection.get("artifacts") or {}).get("patch_diff") or ""
+    patch_diff = _resolve_patch_diff(injection, attempt_dir=source_attempt_dir)
     (destination_attempt_dir / "artifacts" / "vuln.patch").write_text(patch_diff, encoding="utf-8")
     write_json(exploit_dir / "fuzz_poc_manifest.json", manifest)
     (exploit_dir / "fuzz_poc.py").write_text(
@@ -539,11 +544,32 @@ def batch_generate_guided_fuzz_poc(
     use_curated_corpus: bool = True,
     register_curated_results: bool = True,
 ) -> dict[str, Any]:
-    attempt_dirs = sorted(path for path in source_run_dir.glob("attempt_*") if path.is_dir())
+    raw_attempt_dirs = sorted(path for path in source_run_dir.glob("attempt_*") if path.is_dir())
     if limit is not None:
-        attempt_dirs = attempt_dirs[:limit]
-    if not attempt_dirs:
+        raw_attempt_dirs = raw_attempt_dirs[:limit]
+    if not raw_attempt_dirs:
         raise RuntimeError(f"no attempt directories found in {source_run_dir}")
+
+    attempt_dirs: list[Path] = []
+    skipped_attempts: list[dict[str, str]] = []
+    for attempt_dir in raw_attempt_dirs:
+        injection_path = attempt_dir / "injection_result.json"
+        if not injection_path.exists():
+            skipped_attempts.append({"attempt_dir": str(attempt_dir), "reason": "missing injection_result.json"})
+            continue
+        injection = read_json(injection_path)
+        if injection.get("status") != "success":
+            skipped_attempts.append(
+                {"attempt_dir": str(attempt_dir), "reason": f"skipping injection status {injection.get('status')}"}
+            )
+            continue
+        patch_diff = _resolve_patch_diff(injection, attempt_dir=attempt_dir).strip()
+        if not patch_diff:
+            skipped_attempts.append({"attempt_dir": str(attempt_dir), "reason": "missing patch_diff"})
+            continue
+        attempt_dirs.append(attempt_dir)
+    if not attempt_dirs:
+        raise RuntimeError(f"no successful injection attempts available in {source_run_dir}")
 
     first_injection = read_json(attempt_dirs[0] / "injection_result.json")
     project = first_injection["project"]
@@ -570,6 +596,7 @@ def batch_generate_guided_fuzz_poc(
         "mode": "fuzz_poc_guided",
         "source_run_dir": str(source_run_dir),
         "generated_run_dir": str(run_dir),
+        "skipped_source_attempts": skipped_attempts,
         "attempts": attempts,
     }
     write_json(run_dir / "run_summary.json", summary)
@@ -607,6 +634,9 @@ def batch_generate_guided_fuzz_poc(
                         exploit_timeout=exploit_timeout,
                         register_curated_results=register_curated_results,
                     )
+                    if verification.get("status") == "success":
+                        exported = _export_guided_success_bundle(Path(payload["attempt_dir"]), verification)
+                        verification["exported_vulnerability_id"] = exported.get("vulnerability_id", "")
                     verification_results.append(
                         {
                             "attempt_dir": payload["attempt_dir"],
@@ -639,3 +669,305 @@ def batch_generate_guided_fuzz_poc(
         }
     write_json(run_dir / "run_summary.json", summary)
     return summary
+
+
+def backfill_guided_success_exports(
+    *,
+    guided_root: Path | None = None,
+    project: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Export successful historical guided fuzz PoC attempts into vulnerability bundles."""
+    root = guided_root or FUZZ_GUIDED_POC_ROOT
+    if project:
+        root = root / project
+    run_project = project or "_all"
+    run_id = new_run_id("fuzz_poc_guided_backfill")
+    run_dir = fuzz_guided_backfill_run_dir(run_project, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    summary_files = sorted(root.rglob("verification_summary.json"))
+    exported: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen = 0
+
+    for summary_path in summary_files:
+        try:
+            payload = read_json(summary_path)
+        except Exception as exc:
+            skipped.append({"summary_path": str(summary_path), "reason": f"parse_error: {exc}"})
+            continue
+        run_project = str(payload.get("project") or summary_path.parent.parent.name)
+        if project and run_project != project:
+            continue
+        for item in payload.get("attempts", []):
+            verification = item.get("verification_result") or {}
+            if verification.get("status") != "success":
+                continue
+            attempt_dir = Path(str(item.get("attempt_dir") or "")).resolve()
+            if not attempt_dir.exists():
+                skipped.append({"attempt_dir": str(attempt_dir), "reason": "attempt_dir_missing"})
+                continue
+            manifest_path = attempt_dir / "artifacts" / "exploit_files" / "fuzz_poc_manifest.json"
+            if not manifest_path.exists():
+                skipped.append({"attempt_dir": str(attempt_dir), "reason": "manifest_missing"})
+                continue
+            manifest = read_json(manifest_path)
+            source_attempt_dir = Path(str(manifest.get("source_attempt_dir") or "")).resolve()
+            selected_fuzzer = str((manifest.get("selected_fuzzer") or {}).get("fuzzer") or "")
+            existing = _find_existing_guided_export(
+                project=run_project,
+                source_attempt_dir=source_attempt_dir,
+                guided_run_id=attempt_dir.parent.name,
+                guided_attempt_id=attempt_dir.name,
+                selected_fuzzer=selected_fuzzer,
+            )
+            if existing:
+                skipped.append(
+                    {
+                        "attempt_dir": str(attempt_dir),
+                        "reason": "already_exported",
+                        "vulnerability_id": existing,
+                    }
+                )
+                continue
+            exported.append(_export_guided_success_bundle(attempt_dir, verification))
+            seen += 1
+            if limit is not None and seen >= limit:
+                payload = {
+                    "status": "success",
+                    "run_id": run_id,
+                    "run_dir": str(run_dir),
+                    "guided_root": str(root),
+                    "project": project or "",
+                    "exported_count": len(exported),
+                    "skipped_count": len(skipped),
+                    "exports": exported,
+                    "skipped": skipped,
+                    "limit_reached": True,
+                }
+                write_json(run_dir / "backfill_summary.json", payload)
+                return payload
+
+    payload = {
+        "status": "success",
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "guided_root": str(root),
+        "project": project or "",
+        "exported_count": len(exported),
+        "skipped_count": len(skipped),
+        "exports": exported,
+        "skipped": skipped,
+        "limit_reached": False,
+    }
+    write_json(run_dir / "backfill_summary.json", payload)
+    return payload
+
+
+def _export_guided_success_bundle(attempt_dir: Path, verification: dict[str, Any]) -> dict[str, Any]:
+    source_injection = read_json(attempt_dir / "source_injection_result.json")
+    manifest = read_json(attempt_dir / "artifacts" / "exploit_files" / "fuzz_poc_manifest.json")
+    project = source_injection["project"]
+    vuln_parent = project_root(project) / "vulnerabilities"
+    vulnerability_id = next_vulnerability_id(vuln_parent)
+    vuln_dir = vuln_parent / vulnerability_id
+    if vuln_dir.exists() and not (vuln_dir / "vulnerability_metadata.json").exists():
+        shutil.rmtree(vuln_dir, ignore_errors=True)
+    vuln_dir.mkdir(parents=True, exist_ok=True)
+
+    exploit_src = attempt_dir / "artifacts" / "exploit_files"
+    exploit_dst = vuln_dir / "exploit_files"
+    if exploit_dst.exists():
+        shutil.rmtree(exploit_dst, ignore_errors=True)
+    shutil.copytree(exploit_src, exploit_dst)
+
+    patch_diff = (
+        (attempt_dir / "artifacts" / "vuln.patch").read_text(encoding="utf-8")
+        if (attempt_dir / "artifacts" / "vuln.patch").exists()
+        else (source_injection.get("artifacts") or {}).get("patch_diff", "")
+    )
+    (vuln_dir / "patch.diff").write_text(patch_diff, encoding="utf-8")
+    write_json(vuln_dir / "verification_result.json", verification)
+    write_json(vuln_dir / "fuzz_poc_manifest.json", manifest)
+    write_json(vuln_dir / "source_injection_result.json", source_injection)
+
+    metadata = _build_guided_vulnerability_metadata(
+        vulnerability_id=vulnerability_id,
+        attempt_dir=attempt_dir,
+        source_injection=source_injection,
+        manifest=manifest,
+        verification=verification,
+    )
+    write_json(vuln_dir / "vulnerability_metadata.json", metadata)
+    write_json(vuln_dir / "task_generation_context.json", _build_task_generation_context(attempt_dir, manifest, verification))
+    ensure_task_assets(project, vulnerability_id, model_id=None)
+    return {"vulnerability_id": vulnerability_id, "bundle_dir": str(vuln_dir)}
+
+
+def _build_guided_vulnerability_metadata(
+    *,
+    vulnerability_id: str,
+    attempt_dir: Path,
+    source_injection: dict[str, Any],
+    manifest: dict[str, Any],
+    verification: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_fuzz = manifest.get("candidate_fuzz") or {}
+    selected_fuzzer = (manifest.get("selected_fuzzer") or {}).get("fuzzer", "")
+    reports = ((verification.get("metadata") or {}).get("reports") or {})
+    vulnerable_report = reports.get("vulnerable") or {}
+    sanitizer_report = _load_best_effort_sanitizer_report(vulnerable_report)
+    source_attempt_dir = Path(str(manifest.get("source_attempt_dir") or ""))
+    source_run_id = source_attempt_dir.parent.name if source_attempt_dir.name else ""
+    config = load_project_config(source_injection.get("project", ""))
+    seed_provenance = vulnerable_report.get("seed_provenance") if isinstance(vulnerable_report, dict) else {}
+    seed_name = str(
+        vulnerable_report.get("seed")
+        or vulnerable_report.get("seed_name")
+        or (seed_provenance or {}).get("name")
+        or ""
+    ).strip()
+    return {
+        "id": vulnerability_id,
+        "project": source_injection.get("project", ""),
+        "producer": "fuzz_poc_guided",
+        "cwe_group": resolve_cwe_group(
+            source_injection.get("cwe_id", ""),
+            fallback=source_injection.get("cwe_group", "Unknown"),
+        ),
+        "cwe_id": source_injection.get("cwe_id", ""),
+        "selection_run_id": "",
+        "injection_run_id": source_injection.get("run_id", ""),
+        "source_injection_run_id": source_injection.get("run_id", ""),
+        "guided_run_id": attempt_dir.parent.name,
+        "guided_attempt_id": attempt_dir.name,
+        "secure_base_commit": source_injection.get("secure_base_commit", "") or config.secure_base_commit,
+        "selected_fuzzer": selected_fuzzer,
+        "selected_fuzzer_source": manifest.get("selected_fuzzer_source", ""),
+        "success_mode": vulnerable_report.get("mode", ""),
+        "seed_name": seed_name,
+        "seed_relative_path": vulnerable_report.get("seed_relative_path", ""),
+        "seed_provenance": _stringify_seed_provenance(seed_provenance),
+        "seed_source_kind": vulnerable_report.get("source_kind", ""),
+        "seed_generator": vulnerable_report.get("generator", ""),
+        "sanitizer_kind": vulnerable_report.get("sanitizer", "") or candidate_fuzz.get("sanitizer", ""),
+        "has_sanitizer_report": bool(sanitizer_report),
+        "exported_from_verification_status": verification.get("status", ""),
+        "source_attempt_dir": str(source_attempt_dir),
+        "source_run_id": source_run_id,
+    }
+
+
+def _build_task_generation_context(
+    attempt_dir: Path,
+    manifest: dict[str, Any],
+    verification: dict[str, Any],
+) -> dict[str, Any]:
+    profile = manifest.get("trigger_profile") or {}
+    candidate_fuzz = manifest.get("candidate_fuzz") or {}
+    reports = ((verification.get("metadata") or {}).get("reports") or {})
+    vulnerable_report = reports.get("vulnerable") or {}
+    successful_seed = vulnerable_report.get("seed_provenance") if isinstance(vulnerable_report, dict) else {}
+    seed_name = str(
+        vulnerable_report.get("seed")
+        or vulnerable_report.get("seed_name")
+        or (successful_seed or {}).get("name")
+        or ""
+    ).strip()
+    vulnerable_log_relative_path = _normalize_bundle_relative_log_path(
+        vulnerable_report.get("log")
+    ) or "exploit_files/fuzz_results/vulnerable/replay_00.log"
+    return {
+        "producer": "fuzz_poc_guided",
+        "source_injection_result_path": manifest.get("source_injection_result", ""),
+        "selected_fuzzer": (manifest.get("selected_fuzzer") or {}).get("fuzzer", ""),
+        "selected_fuzzer_source": manifest.get("selected_fuzzer_source", ""),
+        "success_mode": vulnerable_report.get("mode", ""),
+        "seed_name": seed_name,
+        "seed_relative_path": vulnerable_report.get("seed_relative_path", ""),
+        "seed_provenance": _stringify_seed_provenance(successful_seed),
+        "seed_source_kind": (successful_seed or {}).get("source_kind", "") if isinstance(successful_seed, dict) else "",
+        "seed_generator": (successful_seed or {}).get("generator", "") if isinstance(successful_seed, dict) else "",
+        "successful_log_relative_path": vulnerable_log_relative_path,
+        "vulnerable_log_relative_path": vulnerable_log_relative_path,
+        "target_file": candidate_fuzz.get("patch_path") or profile.get("patch_path") or "",
+        "target_function": candidate_fuzz.get("function_name") or profile.get("function_name") or "",
+        "target_line_range": profile.get("line_range") or candidate_fuzz.get("line_range") or [],
+        "bug_shape": profile.get("bug_shape") or candidate_fuzz.get("bug_shape") or "",
+        "format_family": profile.get("format_family") or candidate_fuzz.get("format_family") or "",
+        "subsystem": profile.get("subsystem") or candidate_fuzz.get("subsystem") or "",
+        "input_model": profile.get("input_model") or candidate_fuzz.get("input_model") or "",
+        "mutation_goal": profile.get("mutation_goal") or candidate_fuzz.get("mutation_goal") or "",
+        "harness_context": candidate_fuzz.get("harness_context") or "",
+        "instruction_hints": candidate_fuzz.get("instruction_hints") or [],
+        "slice_excerpt": candidate_fuzz.get("slice_excerpt") or "",
+        "triggerability_rationale": candidate_fuzz.get("rationale") or "",
+        "attempt_dir": str(attempt_dir),
+    }
+
+
+def _load_best_effort_sanitizer_report(vulnerable_report: dict[str, Any]) -> str:
+    if not isinstance(vulnerable_report, dict):
+        return ""
+    for key in ("stderr", "stdout", "output", "report_text"):
+        value = vulnerable_report.get(key)
+        if isinstance(value, str) and value.strip():
+            extracted = extract_sanitizer_report(value)
+            if extracted:
+                return extracted
+    return ""
+
+
+def _stringify_seed_provenance(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("provenance") or value.get("source_kind") or "")
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _normalize_bundle_relative_log_path(value: Any) -> str:
+    if not value:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    marker = "exploit_files/"
+    marker_index = text.find(marker)
+    if marker_index != -1:
+        return text[marker_index:]
+    return text
+
+
+def _find_existing_guided_export(
+    *,
+    project: str,
+    source_attempt_dir: Path,
+    guided_run_id: str,
+    guided_attempt_id: str,
+    selected_fuzzer: str,
+) -> str | None:
+    vulnerabilities_dir = project_root(project) / "vulnerabilities"
+    if not vulnerabilities_dir.exists():
+        return None
+    source_attempt_str = str(source_attempt_dir)
+    for vuln_dir in sorted(vulnerabilities_dir.iterdir()):
+        if not vuln_dir.is_dir():
+            continue
+        metadata_path = vuln_dir / "vulnerability_metadata.json"
+        if not metadata_path.exists():
+            continue
+        try:
+            metadata = read_json(metadata_path)
+        except Exception:
+            continue
+        if metadata.get("producer") != "fuzz_poc_guided":
+            continue
+        if (
+            str(metadata.get("source_attempt_dir") or "") == source_attempt_str
+            and str(metadata.get("guided_run_id") or "") == guided_run_id
+            and str(metadata.get("guided_attempt_id") or "") == guided_attempt_id
+            and str(metadata.get("selected_fuzzer") or "") == selected_fuzzer
+        ):
+            return str(metadata.get("id") or vuln_dir.name)
+    return None

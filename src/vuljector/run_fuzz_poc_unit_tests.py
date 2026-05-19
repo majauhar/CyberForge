@@ -15,6 +15,7 @@ from vuljector.run_fuzz_poc import (
     _infer_trigger_profile,
     _pick_fuzzer,
     _pick_fuzzer_sequence,
+    _resolve_patch_diff,
     batch_verify_fuzz_poc,
     generate_fuzz_poc,
 )
@@ -146,6 +147,16 @@ class RunFuzzPocTests(unittest.TestCase):
         self.assertEqual(manifest["selected_builtin_corpus_members"][0]["archive_member"], "corpus/demo.js")
         self.assertNotIn("data", manifest["selected_builtin_corpus_members"][0])
         self.assertGreaterEqual(payload["selected_builtin_corpus_count"], 1)
+
+    def test_resolve_patch_diff_falls_back_to_attempt_patch_file(self) -> None:
+        payload = {
+            "project": "demo",
+            "artifacts": {"patch_diff": ""},
+            "paths": {"patch_path": "artifacts/vuln.patch"},
+        }
+        patch_path = self.source_attempt / "artifacts" / "vuln.patch"
+        patch_path.write_text("--- a/demo.c\n+++ b/demo.c\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8")
+        self.assertIn("+++ b/demo.c", _resolve_patch_diff(payload, attempt_dir=self.source_attempt))
 
     @mock.patch("vuljector.run_fuzz_poc.map_injection_result_to_harness")
     def test_pick_fuzzer_sequence_prefers_preferred_then_alternates(self, mock_map: mock.Mock) -> None:

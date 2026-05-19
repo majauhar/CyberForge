@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from setup.container_runtime import ContainerRuntime
+from setup.mounts import RUN_MOUNT_POINT
 from .models import AgentRequest, AgentResponse
 
 
@@ -69,6 +70,7 @@ def run_agent_task(
             cwd=request.workdir,
             env=env,
             timeout=120,
+            run_args=_docker_run_args(runtime),
         )
         image_kind = "setup image" if allow_setup_image else "ready image"
         logging.info("[%s] Container started from %s (%s)", runtime.project, active_image, image_kind)
@@ -298,3 +300,10 @@ def _collect_agent_env(request: AgentRequest) -> dict[str, str]:
     if "RCHAT_OSS_API_BASE" in env:
         env.setdefault("PYTHONHTTPSVERIFY", "0")
     return env
+
+
+def _docker_run_args(runtime: ContainerRuntime) -> list[str]:
+    args = ["--rm"]
+    if runtime.run_mount_dir is not None:
+        args.extend(["-v", f"{runtime.run_mount_dir}:{RUN_MOUNT_POINT}"])
+    return args

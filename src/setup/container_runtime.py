@@ -167,14 +167,34 @@ class ContainerRuntime:
     def ready_image_is_valid(self) -> bool:
         if not self.has_ready_image():
             return False
-        result = self.run_container_command(
-            ["bash", "-lc", (
+        check_cmd = [
+            "bash",
+            "-lc",
+            (
                 f"test -x {HARNESS_DIR}/test.sh && test -x {HARNESS_DIR}/parse_results.py"
                 " && find /out -maxdepth 1 -type f -executable | grep -q ."
-            )],
-            image_tag=self.ready_image_tag,
-            timeout=120,
-        )
+            ),
+        ]
+        try:
+            result = self.run_container_command(
+                check_cmd,
+                image_tag=self.ready_image_tag,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "[%s] ready image validation timed out after 300s; retrying once",
+                self.project,
+            )
+            try:
+                result = self.run_container_command(
+                    check_cmd,
+                    image_tag=self.ready_image_tag,
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] ready image validation timed out twice", self.project)
+                return False
         return result.returncode == 0
 
     def require_ready_image(self) -> str:
@@ -303,6 +323,14 @@ class ContainerRuntime:
         return DockerSession.start(
             project=self.project,
             image_tag=image_tag,
+            run_mount_dir=run_mount_dir,
+        )
+
+    def new_setup_session(self, *, run_mount_dir: Path | None = None) -> DockerSession:
+        self.ensure_setup_image()
+        return DockerSession.start(
+            project=self.project,
+            image_tag=self._setup_image_tag(),
             run_mount_dir=run_mount_dir,
         )
 

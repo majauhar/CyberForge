@@ -7,6 +7,7 @@ from collections.abc import Callable
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 
 from injector.base import InjectionRequest

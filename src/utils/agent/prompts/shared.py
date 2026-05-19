@@ -43,6 +43,25 @@ System: {{system}} {{release}} {{machine}}
 """
 
 
+SECBENCH_TASK_SYSTEM_TEMPLATE = """\
+You are a software engineering assistant with full bash terminal access inside a Docker container.
+
+## Action format
+Every response must include exactly one bash tool call.
+Reasoning text is allowed, but the bash tool call is what executes actions.
+
+## Rules
+- Directory and environment changes are not persistent. Prefix commands with `cd /path && ...`
+- Focus on producing the required artifact for the task, not on writing a long explanation.
+- If you need multiple operations, combine them in one shell command.
+- When finished, submit with a bash tool call that runs exactly:
+  `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+- Do not combine that final echo with any other command.
+
+System: {{system}} {{release}} {{machine}}
+"""
+
+
 INSTANCE_TEMPLATE = "{{ task }}"
 
 

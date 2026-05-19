@@ -25,6 +25,10 @@ def run_agent_task_pipeline(
     vulnerability_id: str,
     task_type: str,
     model_id: str,
+    variant_id: str | None = None,
+    include_hints: bool = False,
+    teacher_regime: str = "faithful",
+    teacher_assistance: dict | None = None,
 ) -> dict:
     """
     Full pipeline: load vulnerability → run agent → validate → save trajectory + results.
@@ -32,31 +36,63 @@ def run_agent_task_pipeline(
     Args:
         project: project name (must exist in vuljector-projects/)
         vulnerability_id: e.g. "vulnerability_0"
-        task_type: one of "zero_day_poc", "one_day_poc", "secure_patch"
+        task_type: one of "patch", "poc-repo", "poc-desc", "poc-san"
         model_id: LiteLLM model identifier (e.g. "claude-sonnet-4-6")
 
     Returns:
         Summary dict (also written to task_result.json in run_dir).
     """
-    task_type_enum = TaskType(task_type)
+    task_type_enum = TaskType.from_input(task_type)
+    spec = load_vulnerability(
+        project,
+        vulnerability_id,
+        task_type_enum,
+        model_id,
+        variant_id=variant_id,
+        include_hints=include_hints,
+        teacher_regime=teacher_regime,
+        teacher_assistance=teacher_assistance,
+    )
+    return run_agent_task_pipeline_for_spec(
+        spec,
+        requested_task_type=task_type,
+        include_hints=include_hints,
+        teacher_regime=teacher_regime,
+        teacher_assistance=teacher_assistance,
+    )
 
-    config = load_project_config(project)
+
+def run_agent_task_pipeline_for_spec(
+    spec,
+    *,
+    requested_task_type: str | None = None,
+    include_hints: bool | None = None,
+    teacher_regime: str | None = None,
+    teacher_assistance: dict | None = None,
+) -> dict:
+    """Run the task pipeline for a pre-materialized spec."""
+    project = spec.project
+    config = load_project_config(spec.project)
     runtime = build_runtime(config)
-    ensure_setup_completed(runtime, project)
-
-    spec = load_vulnerability(project, vulnerability_id, task_type_enum, model_id)
+    ensure_setup_completed(runtime, spec.project)
 
     run_id = new_run_id("agent_task")
-    run_dir = agent_task_run_dir(project, task_type, run_id)
+    run_dir = agent_task_run_dir(project, spec.task_type.value, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Persist task request for reproducibility
     write_json(run_dir / "task_request.json", {
         "schema_version": "v2",
         "project": project,
-        "vulnerability_id": vulnerability_id,
-        "task_type": task_type,
-        "model_id": model_id,
+        "vulnerability_id": spec.vulnerability_id,
+        "task_type": requested_task_type or spec.task_type.value,
+        "resolved_task_type": spec.task_type.value,
+        "model_id": spec.model_id,
+        "variant_id": spec.bug_description_variant_id,
+        "include_hints": spec.include_hints if include_hints is None else include_hints,
+        "teacher_regime": teacher_regime or spec.teacher_regime,
+        "teacher_assistance": dict(teacher_assistance or spec.teacher_assistance or {}),
+        "instance_id": spec.instance_id,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
     })
@@ -114,6 +150,8 @@ def _run(*, runtime, spec, run_id: str, run_dir: Path) -> dict:
         "trajectory": str(traj_path.relative_to(run_dir)) if traj_path.exists() else "",
         "validation_result": "validation_result.json",
         "task_spec": "task_spec.json",
+        "task_prompt": "task_prompt.txt",
+        "task_system_prompt": "task_system_prompt.txt",
     }
     if artifact_path:
         paths["artifact"] = str(artifact_path.relative_to(run_dir))
@@ -122,11 +160,15 @@ def _run(*, runtime, spec, run_id: str, run_dir: Path) -> dict:
         schema_version="v2",
         project=spec.project,
         vulnerability_id=spec.vulnerability_id,
+        instance_id=spec.instance_id,
         task_type=spec.task_type.value,
         model_id=spec.model_id,
         run_id=run_id,
         timestamp_utc=utc_now_iso(),
+        include_hints=spec.include_hints,
+        bug_description_variant_id=spec.bug_description_variant_id,
         validation_status=validation_result.status,
+        teacher_regime=spec.teacher_regime,
         validation_checks=validation_result.checks,
         failure_cause=validation_result.failure_cause,
         failure_message=validation_result.failure_message,

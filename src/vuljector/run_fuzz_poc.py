@@ -109,6 +109,29 @@ def _write_bytes(path: Path, data: bytes) -> None:
     path.write_bytes(data)
 
 
+def _resolve_patch_diff(injection: dict[str, Any], *, attempt_dir: Path | None = None) -> str:
+    artifacts = injection.get("artifacts") or {}
+    patch_diff = artifacts.get("patch_diff") or ""
+    if patch_diff.strip():
+        return patch_diff
+
+    candidate_paths: list[Path] = []
+    if attempt_dir is not None:
+        candidate_paths.append(attempt_dir / "artifacts" / "vuln.patch")
+    patch_path = str((injection.get("paths") or {}).get("patch_path") or "").strip()
+    if patch_path and attempt_dir is not None:
+        candidate_paths.append(attempt_dir / patch_path)
+
+    for path in candidate_paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if text.strip():
+            return text
+    return ""
+
+
 def _relative_paths_for_attempt(attempt_dir: Path, exploit_dir: Path) -> dict[str, str]:
     return {
         "attempt_dir": str(attempt_dir.relative_to(attempt_dir.parent)),
@@ -134,6 +157,7 @@ def _synthesized_injection_result(
     source_artifacts = source_injection.get("artifacts") or {}
     source_paths = source_injection.get("paths") or {}
     attack_script = source_artifacts.get("attack_script") or ""
+    patch_diff = _resolve_patch_diff(source_injection, attempt_dir=attempt_dir)
     return {
         "project": source_injection["project"],
         "run_id": run_id,
@@ -153,7 +177,7 @@ def _synthesized_injection_result(
         "usage": {},
         "paths": _relative_paths_for_attempt(attempt_dir, exploit_dir),
         "artifacts": {
-            "patch_diff": source_artifacts.get("patch_diff") or "",
+            "patch_diff": patch_diff,
             "attack_script": attack_script,
             "exploit_filename": "exploit.sh",
             "fuzz_driver_filename": "fuzz_poc.py",
@@ -867,7 +891,9 @@ def _seed_record(
     bug_conditioned: bool,
     source_kind: str,
     source_name: str,
-    replay_order: int,
+    replay_order: int | None = None,
+    replay_target: bool = True,
+    corpus_target: bool = True,
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -877,9 +903,9 @@ def _seed_record(
         "bug_conditioned": bug_conditioned,
         "source_kind": source_kind,
         "source_name": source_name,
-        "replay_target": True,
-        "corpus_target": True,
-        "replay_order": replay_order,
+        "replay_target": replay_target,
+        "corpus_target": corpus_target,
+        "replay_order": 0 if replay_order is None else replay_order,
     }
 
 
@@ -1107,6 +1133,32 @@ def _generate_input_records(
     records: list[dict[str, Any]] = []
     seen_hashes: dict[str, str] = {}
     format_family = profile.get("format_family")
+    for item in builtin_corpus_members or []:
+        body = item.get("data")
+        name = str(item.get("name") or "").strip()
+        if not name or not isinstance(body, (bytes, bytearray)):
+            continue
+        digest = hashlib.sha256(bytes(body)).hexdigest()
+        if digest in seen_hashes:
+            continue
+        seen_hashes[digest] = name
+        path = out_dir / name
+        path.write_bytes(bytes(body))
+        records.append(
+            _seed_record(
+                name=name,
+                relative_path=str(Path("artifacts/exploit_files/generated_inputs") / name),
+                provenance=str(item.get("provenance") or "builtin_corpus_member"),
+                generator="builtin_corpus_replay",
+                bug_conditioned=bool(item.get("bug_conditioned")),
+                source_kind="builtin_corpus",
+                source_name=str(item.get("archive_member") or item.get("name") or ""),
+                replay_target=bool(item.get("replay_target")),
+                corpus_target=True,
+                replay_order=item.get("replay_order"),
+            )
+        )
+
     bases = _seed_bases(source_templates, builtin_corpus_members)
     for seed in bases[:6]:
         pseudo_path = Path(seed["name"])
@@ -1352,6 +1404,8 @@ def run_and_capture(args, log_name):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=replay_timeout if replay_timeout else None,
         )
         output = proc.stdout
@@ -1447,7 +1501,14 @@ if any(EXTRA_DIR.iterdir()):
     args.append(str(EXTRA_DIR))
 
 fuzz_started = time.monotonic()
-proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+proc = subprocess.run(
+    args,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    encoding="utf-8",
+    errors="replace",
+)
 fuzz_duration = time.monotonic() - fuzz_started
 fuzz_log.write_text(proc.stdout, encoding="utf-8")
 artifact_paths = []
@@ -1973,7 +2034,7 @@ def _build_generated_attempt(
     }
 
     write_json(destination_attempt_dir / "source_injection_result.json", injection)
-    patch_diff = (injection.get("artifacts") or {}).get("patch_diff") or ""
+    patch_diff = _resolve_patch_diff(injection, attempt_dir=source_attempt_dir)
     (destination_attempt_dir / "artifacts" / "vuln.patch").write_text(patch_diff, encoding="utf-8")
     write_json(exploit_dir / "fuzz_poc_manifest.json", manifest)
     (exploit_dir / "fuzz_poc.py").write_text(
@@ -2087,7 +2148,7 @@ def verify_fuzz_poc_attempt(
     exploit_wrapper = exploit_dir / "exploit.sh"
     if not exploit_wrapper.exists():
         raise FileNotFoundError(f"missing generated exploit wrapper: {exploit_wrapper}")
-    patch_diff = (injection.get("artifacts") or {}).get("patch_diff") or ""
+    patch_diff = _resolve_patch_diff(injection, attempt_dir=attempt_dir)
     if not patch_diff.strip():
         raise RuntimeError("missing patch diff in source injection result")
 
@@ -2328,7 +2389,7 @@ def batch_generate_fuzz_poc_filtered(
                 {"attempt_dir": str(attempt_dir), "reason": f"skipping injection status {injection.get('status')}"}
             )
             continue
-        patch_diff = ((injection.get("artifacts") or {}).get("patch_diff") or "").strip()
+        patch_diff = _resolve_patch_diff(injection, attempt_dir=attempt_dir).strip()
         if not patch_diff:
             skipped_attempts.append({"attempt_dir": str(attempt_dir), "reason": "missing patch_diff"})
             continue

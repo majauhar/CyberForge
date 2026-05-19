@@ -17,6 +17,7 @@ from .selection import (
 )
 from .shared import (
     INSTANCE_TEMPLATE,
+    SECBENCH_TASK_SYSTEM_TEMPLATE,
     SECURITY_SYSTEM_TEMPLATE,
     SYSTEM_TEMPLATE,
     build_harness_note,
@@ -32,6 +33,7 @@ __all__ = [
     "CVE_REPORT_TASK",
     "FUZZER_VULN_INJECT_TASK",
     "INSTANCE_TEMPLATE",
+    "SECBENCH_TASK_SYSTEM_TEMPLATE",
     "SECURITY_SYSTEM_TEMPLATE",
     "SYSTEM_TEMPLATE",
     "TEST_DISCOVERY_TASK",
