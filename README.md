@@ -370,53 +370,145 @@ Requires `patch.diff` and `exploit_files/` to be present in the vulnerability fo
 ## Agent Tasks (Phase 5)
 
 Once vulnerabilities are verified and stored in `vuljector-projects/<project>/vulnerabilities/`,
-Phase 5 runs swe-agent-mini on three synthetic task types derived from each vulnerability.
-Trajectories are saved and scored for downstream SFT filtering.
+Phase 5 can run SEC-bench-style synthetic tasks against them. The current canonical task types are:
+
+- `patch`
+- `poc-repo`
+- `poc-desc`
+- `poc-san`
+
+Legacy aliases are still accepted for compatibility:
+
+- `secure_patch -> patch`
+- `zero_day_poc -> poc-repo`
+- `one_day_poc -> poc-desc`
 
 ### Task Types
 
 | Task | What the agent knows | Agent must produce | Validation |
 |---|---|---|---|
-| `zero_day_poc` | Nothing — must find the vulnerability | `/tmp/attack.py` | Exploit triggers on vulnerable, not on secure baseline |
-| `one_day_poc` | CWE, affected file(s), patch diff | `/tmp/attack.py` | Same |
-| `secure_patch` | CWE, affected file(s), description | `/tmp/fix.patch` | Reference exploit no longer triggers; unit tests pass |
+| `poc-repo` | Repo only | `/testcase/...` bundle | PoC triggers on vulnerable build |
+| `poc-desc` | Repo + bug description | `/testcase/...` bundle | Same |
+| `poc-san` | Repo + bug description + sanitizer report | `/testcase/...` bundle | SEC-bench-style `secb build` + `secb repro` |
+| `patch` | Repo + bug description + sanitizer report | `/tmp/fix.patch` | Reference repro no longer triggers; unit tests pass |
 
-### Run
+For PoC tasks, the primary artifact is a testcase directory, saved from the agent container as
+`artifacts/testcase/` and `artifacts/testcase.tar.gz`. The expected testcase filename is instance-specific
+and comes from the local `secb` shim for that vulnerability.
+
+### Run One Task
 
 ```bash
 uv run vuljector agent-task <project> <vulnerability_id> <task_type> <model_id>
 
 # Examples:
-uv run vuljector agent-task flask vulnerability_0 one_day_poc claude-sonnet-4-6
-uv run vuljector agent-task flask vulnerability_0 zero_day_poc claude-sonnet-4-6
-uv run vuljector agent-task flask vulnerability_0 secure_patch claude-sonnet-4-6
+uv run vuljector agent-task libpng vulnerability_0 poc-san openai/gpt-5-mini-2025-08-07
+uv run vuljector agent-task brotli vulnerability_18 patch openai/gpt-5-mini-2025-08-07
+```
+
+To include structured hints in the prompt:
+
+```bash
+uv run vuljector agent-task libpng vulnerability_0 poc-san openai/gpt-5-mini-2025-08-07 --include-hints
 ```
 
 ### Output
 
 ```
 runs/agent_tasks/<project>/<task_type>/<run_id>/
-  task_request.json     # inputs
-  task_spec.json        # full task spec (CWE + affected files from patch.diff)
-  trajectory.json       # raw mini-swe-agent conversation
+  task_request.json
+  task_spec.json
+  task_prompt.txt
+  task_system_prompt.txt
+  trajectory.json
   validation_result.json
-  task_result.json      # validation status + quality metrics + SFT tier
+  task_result.json
   artifacts/
-    attack.py           # agent's exploit (PoC tasks)
-    fix.patch           # agent's fix (secure_patch task)
+    testcase/           # PoC tasks
+    testcase.tar.gz     # PoC tasks
+    fix.patch           # patch tasks
+```
+
+### SEC-Bench-Style Collection
+
+The intended flow for `poc-san` / `patch` data collection is:
+
+1. Rank exported vulnerabilities for likely solvability.
+2. Run assisted-first teacher collection with diverse assistance profiles.
+3. Keep trajectories, prompts, artifacts, and validation for downstream SFT filtering.
+
+#### 1. Rank Candidate Tasks
+
+```bash
+uv run vuljector task-scout <project> --task-modes poc-san,patch
+
+# Example:
+uv run vuljector task-scout brotli --task-modes poc-san,patch
+```
+
+Outputs land under:
+
+```text
+runs/task_scout/<project>/<run_id>/
+  scout_summary.json
+```
+
+#### 2. Assisted-First Teacher Collection
+
+```bash
+uv run vuljector teacher-collect <project> \
+  --model-id openai/gpt-5-mini-2025-08-07 \
+  --scout-summary runs/task_scout/<project>/<run_id>/scout_summary.json \
+  --task-modes poc-san \
+  --limit 2 \
+  --regimes assisted,oracle,faithful \
+  --diversity standard
+```
+
+Notes:
+
+- `--regimes assisted,oracle,faithful` runs assisted attempts first.
+- `--diversity standard` enables multiple assistance profiles for `poc-san`, such as:
+  - `corpus_first`
+  - `slice_localized`
+  - `hybrid`
+- The collector records `teacher_regime`, optional `teacher_assistance`, and task-level results.
+
+Outputs land under:
+
+```text
+runs/teacher_collection/<project>/<run_id>/
+  collection_request.json
+  candidates.json
+  collection_summary.partial.json
+  collection_summary.json
+  attempts.jsonl
+  errors.jsonl
+  teacher_assistance/
+```
+
+Per-attempt task runs still land under:
+
+```text
+runs/agent_tasks/<project>/poc-san/<run_id>/
+```
+
+### Guided Export / Backfill
+
+Successful guided fuzz PoC validations can be exported into `vuljector-projects` and then consumed by the
+task pipeline. Historical successes can be backfilled with:
+
+```bash
+uv run vuljector fuzz-guided-poc backfill-exports <project>
+
+# Example:
+uv run vuljector fuzz-guided-poc backfill-exports assimp
 ```
 
 ### SFT Trajectory Tiers
 
-`task_result.json` includes a `quality_metrics.sft_tier` field:
-
-| Tier | Criteria | Action |
-|---|---|---|
-| `tier1` | `validation=success`, `completed=True`, `format_errors=0` | Keep for SFT |
-| `tier2` | `validation=success`, `completed=True`, `format_errors≤2` | Review before SFT |
-| `drop` | Any other | Discard |
-
-The raw `trajectory.json` messages field contains the full agent conversation for SFT formatting.
+`task_result.json` includes `quality_metrics.sft_tier` for downstream filtering.
+The raw `trajectory.json` `messages` field contains the full agent conversation for SFT formatting.
 
 
 ## Metrics
