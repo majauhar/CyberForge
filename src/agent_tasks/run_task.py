@@ -101,7 +101,7 @@ def _build_setup_commands(runtime: ContainerRuntime, spec: SyntheticTaskSpec) ->
     cmds: list[str] = [
         f"cd {repo} && git reset --hard {spec.secure_base_commit} && git clean -fdx",
         f"echo '{patch_b64}' | base64 -d > /tmp/vuln.patch && cd {repo} && git apply /tmp/vuln.patch",
-        "bash /src/build.sh 2>&1 | tail -20 || true",
+        f"cd {repo} && bash /src/build.sh 2>&1 | tail -20 || true",
         "rm -rf /testcase /tmp/testcase && mkdir -p /testcase && ln -s /testcase /tmp/testcase",
         f"echo '{secb_b64}' | base64 -d > /usr/local/bin/secb && chmod +x /usr/local/bin/secb",
         f"rm -rf {repo}/.git && git init {repo}"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
@@ -19,12 +20,24 @@ from pathlib import Path
 from typing import Any
 
 _VULJECTOR_ROOT = Path(__file__).resolve().parents[2]
-_RUNS = _VULJECTOR_ROOT / "runs" / "ossfuzz"
-_DEFAULT_CANONICAL = _RUNS / "csv_rich_vuln_index.jsonl"
-_DEFAULT_TESTCASE_ROOT = _RUNS / "materialized_testcases"
-_DEFAULT_OUT_ROOT = _RUNS / "historical_bug_reproduction_inputs"
+_SHARED_OSSFUZZ_ROOT = _VULJECTOR_ROOT / "runs" / "ossfuzz"
+_DEFAULT_CANONICAL = _SHARED_OSSFUZZ_ROOT / "csv_rich_vuln_index.jsonl"
+_DEFAULT_TESTCASE_ROOT = _SHARED_OSSFUZZ_ROOT / "materialized_testcases"
 _DEFAULT_PROJECTS_ROOT = _VULJECTOR_ROOT.parent / "vuljector-projects"
 _TESTCASE_ID_RE = re.compile(r"testcase_id=(\d+)")
+
+
+def _configured_runs_root() -> Path:
+    override = os.environ.get("VULJECTOR_RUNS_ROOT") or os.environ.get("RUNS_ROOT")
+    if not override:
+        return _VULJECTOR_ROOT / "runs"
+    path = Path(override).expanduser()
+    if not path.is_absolute():
+        path = (_VULJECTOR_ROOT / path).resolve()
+    return path
+
+
+_DEFAULT_OUT_ROOT = _configured_runs_root() / "ossfuzz" / "historical_bug_reproduction_inputs"
 
 
 def utc_now_compact() -> str:

@@ -116,12 +116,35 @@ def build_secb_shim(
             "exit 1"
         )
 
+    build_body = f"""cd {repo_q}
+# General pre-build hygiene for OSS-Fuzz style scripts that are not fully idempotent.
+rm -rf /src/seeds /out/lib 2>/dev/null || true
+if [ -d my_build ]; then rm -rf my_build; fi
+# Some projects expect ./BuildFuzzers.sh relative to the build.sh cwd even when the helper lives deeper in the repo.
+if [ ! -f /src/BuildFuzzers.sh ]; then
+    buildfuzzers_path=""
+    if [ -f BuildFuzzers.sh ]; then
+        buildfuzzers_path="{repo_q}/BuildFuzzers.sh"
+    else
+        buildfuzzers_rel="$(find . -path '*/BuildFuzzers.sh' | head -n1 || true)"
+        if [ -n "$buildfuzzers_rel" ]; then
+            buildfuzzers_path="{repo_q}/${{buildfuzzers_rel#./}}"
+        fi
+    fi
+    if [ -n "$buildfuzzers_path" ]; then
+        ln -sf "$buildfuzzers_path" /src/BuildFuzzers.sh 2>/dev/null || true
+        if [ ! -f BuildFuzzers.sh ]; then
+            ln -sf "$buildfuzzers_path" ./BuildFuzzers.sh 2>/dev/null || true
+        fi
+    fi
+fi
+FUZZING_LANGUAGE={language_q} FUZZING_ENGINE={engine_q} compile"""
+
     return f"""#!/bin/bash
 set -euo pipefail
 
 build() {{
-    cd {repo_q}
-    FUZZING_LANGUAGE={language_q} FUZZING_ENGINE={engine_q} compile
+{_indent(build_body, 4)}
 }}
 
 repro() {{

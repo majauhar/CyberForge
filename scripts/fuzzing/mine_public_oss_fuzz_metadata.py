@@ -63,6 +63,10 @@ def gcs_fetch_text(bucket: str, object_name: str) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
+def gcs_fetch_json(bucket: str, object_name: str) -> Any:
+    return json.loads(gcs_fetch_text(bucket, object_name))
+
+
 def latest_date(bucket: str, prefix: str) -> str | None:
     dates: list[str] = []
     for entry in gcs_list_prefixes(bucket, prefix):
@@ -101,6 +105,16 @@ def parse_pairings_yaml(text: str) -> list[dict[str, str]]:
     return pairings
 
 
+def parse_fuzzer_names_from_objects(objects: set[str], prefix: str) -> list[str]:
+    names: set[str] = set()
+    pattern = re.compile(rf"^{re.escape(prefix)}fuzzerLogFile-(.+)\.data(?:\.yaml)?$")
+    for object_name in objects:
+        match = pattern.match(object_name)
+        if match:
+            names.add(match.group(1))
+    return sorted(names)
+
+
 def load_project_list(project_args: list[str] | None) -> list[str]:
     if project_args:
         return sorted(set(project_args))
@@ -125,15 +139,53 @@ def fetch_introspector_cache(project: str) -> dict[str, Any]:
         "blockers": f"{date_prefix}branch-blockers.json",
         "pairings": f"{date_prefix}exe_to_fuzz_introspector_logs.yaml",
         "files": f"{date_prefix}all-files.json",
+        "light_files": f"{date_prefix}light/all_files.json",
     }
 
-    try:
-        raw_functions = json.loads(gcs_fetch_text(INTROSPECTOR_BUCKET, required["functions"]))
-        blockers = json.loads(gcs_fetch_text(INTROSPECTOR_BUCKET, required["blockers"]))
-        pairings_text = gcs_fetch_text(INTROSPECTOR_BUCKET, required["pairings"])
-        all_files = json.loads(gcs_fetch_text(INTROSPECTOR_BUCKET, required["files"]))
-    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return {"available": False, "date": date, "error": str(exc)}
+    raw_functions: list[dict[str, Any]] = []
+    blockers: dict[str, Any] = {}
+    pairings: list[dict[str, str]] = []
+    all_files: list[str] = []
+    errors: list[str] = []
+
+    if required["functions"] in objects:
+        try:
+            raw_functions = gcs_fetch_json(INTROSPECTOR_BUCKET, required["functions"])
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            errors.append(f"functions: {exc}")
+
+    if required["blockers"] in objects:
+        try:
+            blockers = gcs_fetch_json(INTROSPECTOR_BUCKET, required["blockers"])
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            errors.append(f"blockers: {exc}")
+
+    if required["pairings"] in objects:
+        try:
+            pairings = parse_pairings_yaml(gcs_fetch_text(INTROSPECTOR_BUCKET, required["pairings"]))
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            errors.append(f"pairings: {exc}")
+    else:
+        for fuzzer_name in parse_fuzzer_names_from_objects(objects, date_prefix):
+            pairings.append(
+                {
+                    "executable_path": f"/out/{fuzzer_name}",
+                    "fuzzer_log_file": f"{date_prefix}fuzzerLogFile-{fuzzer_name}.data",
+                }
+            )
+
+    files_object = required["files"] if required["files"] in objects else required["light_files"]
+    if files_object in objects:
+        try:
+            all_files = gcs_fetch_json(INTROSPECTOR_BUCKET, files_object)
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            errors.append(f"all_files: {exc}")
+
+    if not raw_functions and not all_files and not pairings:
+        payload: dict[str, Any] = {"available": False, "date": date}
+        if errors:
+            payload["error"] = "; ".join(errors)
+        return payload
 
     functions = []
     for entry in raw_functions:
@@ -156,7 +208,6 @@ def fetch_introspector_cache(project: str) -> dict[str, Any]:
             }
         )
 
-    pairings = parse_pairings_yaml(pairings_text)
     fuzzers = []
     for pairing in pairings:
         executable_path = pairing.get("executable_path", "")
@@ -176,6 +227,7 @@ def fetch_introspector_cache(project: str) -> dict[str, Any]:
         "fuzzers": fuzzers,
         "functions": functions,
         "all_files": [normalize_source_path(path, project) for path in all_files],
+        **({"warnings": errors} if errors else {}),
     }
 
 
@@ -185,8 +237,19 @@ def fetch_coverage_cache(project: str, fuzzer_names: list[str]) -> dict[str, Any
     if not date:
         return {"available": False}
 
+    requested_names = sorted(set(fuzzer_names))
+    if not requested_names:
+        object_names = gcs_list_objects(COVERAGE_BUCKET, f"{base_prefix}{date}/")
+        requested_names = sorted(
+            {
+                Path(name).stem
+                for name in object_names
+                if name.endswith(".json") and name.startswith(f"{base_prefix}{date}/")
+            }
+        )
+
     fuzzer_stats: dict[str, Any] = {}
-    for fuzzer_name in sorted(set(fuzzer_names)):
+    for fuzzer_name in requested_names:
         object_name = f"{base_prefix}{date}/{fuzzer_name}.json"
         try:
             payload = json.loads(gcs_fetch_text(COVERAGE_BUCKET, object_name))
@@ -210,6 +273,16 @@ def mine_project(project: str) -> dict[str, Any]:
     introspector = fetch_introspector_cache(project)
     fuzzer_names = [f["name"] for f in introspector.get("fuzzers", [])] if introspector.get("available") else []
     coverage = fetch_coverage_cache(project, fuzzer_names)
+    if introspector.get("available") and not introspector.get("fuzzers"):
+        introspector["fuzzers"] = [
+            {
+                "name": name,
+                "executable_path": f"/out/{name}",
+                "log_base": "",
+                "blockers": [],
+            }
+            for name in sorted((coverage.get("fuzzer_stats") or {}).keys())
+        ]
     project_json = json.loads((PROJECTS_ROOT / project / "project.json").read_text())
     return {
         "project": project,
