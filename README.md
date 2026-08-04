@@ -10,7 +10,7 @@ The installed CLI and Python package are named `vuljector`.
 
 ## Related repositories
 
-- [**CyberForge-projects**](https://github.com/vuljector/CyberForge-projects) — the released dataset of injected, PoV-verified vulnerabilities (the `vuljector-projects/` layout this tool reads and writes).
+- [**CyberForge-projects**](https://huggingface.co/datasets/AmL-hug/cyberforge-projects) — the released dataset of injected, PoV-verified vulnerabilities on Hugging Face (the `vuljector-projects/` layout this tool reads and writes).
 - [**CyberForge-training**](https://github.com/vuljector/CyberForge-training) — teacher-trajectory cleansing and Gemma-4 LoRA SFT code that consumes the trajectories produced by `teacher-collect`.
 
 ## Setup
