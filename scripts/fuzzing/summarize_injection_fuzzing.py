@@ -14,6 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_ROOT = REPO_ROOT / "runs" / "injection"
 PROJECTS_ROOT = REPO_ROOT.parent / "vuljector-projects"
 
+# Legacy absolute-path prefixes that may still appear in older run metadata.
+LEGACY_WORKSPACE_ROOT = "/legacy/Vuljector-lane2-incontext/"
+LEGACY_PROJECTS_ROOT = "/legacy/vuljector-projects/"
+
 PATCH_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 FUZZER_RE = re.compile(r"/out/([A-Za-z0-9_.@+-]+)")
 TESTCASE_RE = re.compile(r'["\']([^"\']*(?:testcase|corpus|poc|\.bin|\.otf|\.ttf|\.png|\.jpg)[^"\']*)["\']')
@@ -40,13 +44,13 @@ def normalize_workspace_path(raw_path: str) -> str | None:
     if not raw_path:
         return None
     path = raw_path.strip()
-    if path.startswith("/Users/manansuri/Projects/Vuljector-lane2-incontext/"):
-        suffix = path.split("/Users/manansuri/Projects/Vuljector-lane2-incontext/", 1)[1]
+    if path.startswith(LEGACY_WORKSPACE_ROOT):
+        suffix = path.split(LEGACY_WORKSPACE_ROOT, 1)[1]
         candidate = REPO_ROOT / suffix
         if candidate.exists():
             return str(candidate)
-    if path.startswith("/Users/manansuri/Projects/vuljector-projects/"):
-        suffix = path.split("/Users/manansuri/Projects/vuljector-projects/", 1)[1]
+    if path.startswith(LEGACY_PROJECTS_ROOT):
+        suffix = path.split(LEGACY_PROJECTS_ROOT, 1)[1]
         candidate = PROJECTS_ROOT / suffix
         if candidate.exists():
             return str(candidate)

@@ -27,7 +27,7 @@ class FuzzGuidedStrategy(SelectionStrategy):
 
     def run(self, runtime: ContainerRuntime, request: Any) -> SelectionResult:
         repo_path = _resolve_repo_path(runtime, request)
-        surface = load_project_fuzz_surface(request.project)
+        surface = load_project_fuzz_surface(request.project, src_dir=repo_path.name)
         candidates = plan_fuzz_guided_candidates(
             project=request.project,
             repo_root=repo_path,

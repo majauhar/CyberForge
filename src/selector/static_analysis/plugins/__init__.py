@@ -1,7 +1,7 @@
 """Plugin registry — maps language name to its LanguagePlugin instance.
 
 To add a new language:
-1. Create vuljector/plugins/{lang}_plugin.py
+1. Create selector/static_analysis/plugins/{lang}_plugin.py
 2. Import the plugin class here
 3. Add it to PLUGIN_REGISTRY
 """
@@ -9,8 +9,6 @@ To add a new language:
 from selector.static_analysis.plugins.python_plugin import PythonPlugin
 from selector.static_analysis.plugins.c_plugin import CPlugin
 from selector.static_analysis.plugins.js_plugin import JsPlugin
-# from selector.static_analysis.plugins.go_plugin import GoPlugin      # future
-# from selector.static_analysis.plugins.java_plugin import JavaPlugin  # future
 
 _c_plugin_instance = CPlugin()
 _js_plugin_instance = JsPlugin()

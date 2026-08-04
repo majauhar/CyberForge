@@ -126,7 +126,7 @@ class InjectionResult:
     cwe_id: str | None
     strategy: dict[str, Any]
     usage: dict[str, Any]
-    # Real file paths relative to the run directory (exploit_dir, patch.diff, etc.)
+    # Real file paths relative to the run directory (exploit_dir, inject_vulnerability.diff, etc.)
     paths: dict[str, str]
     # Inline artifact content — patch diff, attack script, etc. NOT file paths.
     artifacts: dict[str, str] = field(default_factory=dict)

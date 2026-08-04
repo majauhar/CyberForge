@@ -106,7 +106,7 @@ def _score_bundle(
         score += 8
         reasons.append("guided-validated export")
 
-    patch_diff = (vuln_dir / "patch.diff").read_text(encoding="utf-8", errors="ignore") if (vuln_dir / "patch.diff").exists() else ""
+    patch_diff = (vuln_dir / "inject_vulnerability.diff").read_text(encoding="utf-8", errors="ignore") if (vuln_dir / "inject_vulnerability.diff").exists() else ""
     if patch_diff.strip():
         score += 8
         reasons.append("non-empty patch bundle")

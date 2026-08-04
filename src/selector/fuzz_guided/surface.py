@@ -79,9 +79,15 @@ class ProjectFuzzSurface:
     reached_files: list[str]
 
 
-def _is_project_local(project: str, source_file: str) -> bool:
-    normalized = source_file.replace("\\", "/")
-    return normalized.startswith(f"/src/{project}/")
+def _is_project_local(src_dir: str, source_file: str) -> bool:
+    # src_dir is the OSS-Fuzz checkout directory name (== the repo clone dir name),
+    # which is NOT always the project name (php->php-src, ghostscript->ghostpdl,
+    # lighttpd->lighttpd1.4) and can differ in case (FreeRDP, OpenJPH, uWebSockets).
+    # Matching the bare project name here silently dropped every function for those
+    # projects -> empty surface -> 0 candidates -> spurious skip. Match the real
+    # checkout dir, case-insensitively.
+    normalized = source_file.replace("\\", "/").lower()
+    return normalized.startswith(f"/src/{src_dir.lower()}/")
 
 
 def _is_candidate_source_file(source_file: str) -> bool:
@@ -282,15 +288,20 @@ def _summarize_blockers(raw_blockers: list[dict]) -> list[dict[str, int | str]]:
     )[:5]
 
 
-def load_project_fuzz_surface(project: str, cache_dir: Path = DEFAULT_CACHE_DIR) -> ProjectFuzzSurface:
+def load_project_fuzz_surface(
+    project: str, cache_dir: Path = DEFAULT_CACHE_DIR, src_dir: str | None = None
+) -> ProjectFuzzSurface:
     cache = load_cache(project, cache_dir)
+    # src_dir = OSS-Fuzz checkout dir (passed as repo_root.name by run.py); defaults to
+    # the project name to preserve behaviour for the common case and the unit tests.
+    src_dir = src_dir or project
     assets = local_fuzz_assets(project)
     options_map = load_local_fuzzer_options(project)
     raw_functions = cache.get("introspector", {}).get("functions", [])
     normalized = [
         _normalize_function(entry)
         for entry in raw_functions
-        if _is_project_local(project, str(entry.get("source_file") or ""))
+        if _is_project_local(src_dir, str(entry.get("source_file") or ""))
         and _is_candidate_source_file(str(entry.get("source_file") or ""))
     ]
 
@@ -306,7 +317,7 @@ def load_project_fuzz_surface(project: str, cache_dir: Path = DEFAULT_CACHE_DIR)
         file_coverage: dict[str, float] = {}
         for file_entry in (coverage.get(name, {}) or {}).get("files", []):
             filename = str(file_entry.get("filename") or "")
-            if not (_is_project_local(project, filename) and _is_candidate_source_file(filename)):
+            if not (_is_project_local(src_dir, filename) and _is_candidate_source_file(filename)):
                 continue
             reached_files.add(filename)
             summary = file_entry.get("summary") or {}

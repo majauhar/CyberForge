@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -18,8 +19,12 @@ from utils.github_utils import reset_to_secure_commit
 from vuljector.core import build_runtime, ensure_setup_completed, load_project_config
 
 
+# Point SECB_EVAL_TEMPLATE at your local SEC-bench checkout.
 SECB_EVAL_TEMPLATE = Path(
-    "/data_slow/vuljector/benchmark/SEC-bench/secb/evaluator/templates/eval_poc_script.j2"
+    os.environ.get(
+        "SECB_EVAL_TEMPLATE",
+        "SEC-bench/secb/evaluator/templates/eval_poc_script.j2",
+    )
 )
 
 

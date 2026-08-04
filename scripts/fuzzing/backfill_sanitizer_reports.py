@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument(
         "--projects-root",
         type=Path,
-        default=Path("/home/mns67/vuljector_fuzzer_exps/vuljector-projects"),
+        default=Path(__file__).resolve().parents[2].parent / "vuljector-projects",
         help="Root containing <project>/vulnerabilities/<id> bundles.",
     )
     parser.add_argument(

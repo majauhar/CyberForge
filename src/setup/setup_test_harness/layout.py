@@ -10,8 +10,16 @@ HARNESS_SCRIPT_PATH = f"{HARNESS_DIR}/test.sh"
 PARSER_PATH = f"{HARNESS_DIR}/parse_results.py"
 
 
-def harness_exec_command() -> str:
-    return f"bash {HARNESS_SCRIPT_PATH}"
+def harness_exec_command(timeout_s: int | None = None) -> str:
+    base = f"bash {HARNESS_SCRIPT_PATH}"
+    if timeout_s and timeout_s > 0:
+        # Bound the test harness so a hanging or effectively-infinite test suite
+        # (e.g. an injected bug that loops forever) cannot wedge the worker until
+        # the external watchdog reaps it ~2h later. GNU coreutils `timeout` is
+        # present in all project images; send TERM at timeout_s, hard KILL 15s
+        # later if it ignores TERM.
+        return f"timeout -k 15 {timeout_s} {base}"
+    return base
 
 
 def _templates_dir() -> Path:

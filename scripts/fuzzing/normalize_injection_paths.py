@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,10 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_ROOT = REPO_ROOT / "runs" / "injection"
 PROJECTS_ROOT = REPO_ROOT.parent / "vuljector-projects"
-OLD_WORKSPACE_ROOT = "/Users/manansuri/Projects/Vuljector-lane2-incontext"
-OLD_PROJECTS_ROOT = "/Users/manansuri/Projects/vuljector-projects"
+# Legacy absolute-path prefixes that may still appear in older run metadata.
+# Override via env if your archived runs used a different original location.
+OLD_WORKSPACE_ROOT = os.environ.get("VULJECTOR_LEGACY_WORKSPACE_ROOT", "/legacy/Vuljector-lane2-incontext")
+OLD_PROJECTS_ROOT = os.environ.get("VULJECTOR_LEGACY_PROJECTS_ROOT", "/legacy/vuljector-projects")
 
 
 @dataclass

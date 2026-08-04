@@ -19,7 +19,7 @@ Requires GITHUB_TOKEN env var for 5000 req/hr (falls back to 60 req/hr unauthed)
 Usage:
     python scripts/mine_github_issue_records.py
     python scripts/mine_github_issue_records.py --project behaviortreecpp
-    GITHUB_TOKEN=ghp_... python scripts/mine_github_issue_records.py
+    GITHUB_TOKEN=<token> python scripts/mine_github_issue_records.py
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ _USER_AGENT = "Vuljector/1.0 (OSS-Fuzz vulnerability mining; research use)"
 
 _VULJECTOR_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_PROJECTS_DIR = _VULJECTOR_ROOT.parent / "vuljector-projects"
-_DEFAULT_OSS_FUZZ_DIR = Path("/Users/manansuri/Projects/oss-fuzz")
+_DEFAULT_OSS_FUZZ_DIR = _VULJECTOR_ROOT.parent / "oss-fuzz"
 _DEFAULT_OSV_DIR = _VULJECTOR_ROOT / "runs" / "ossfuzz" / "osv"
 _DEFAULT_OUT_DIR = _VULJECTOR_ROOT / "runs" / "ossfuzz" / "github_issues"
 

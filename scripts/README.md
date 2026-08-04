@@ -55,7 +55,7 @@ python scripts/select_projects.py --csv scripts/oss_fuzz_full.csv --total 50
 python scripts/select_projects.py \
   --csv scripts/oss_fuzz_full.csv \
   --total 200 \
-  --exclude-dir /home/anl31/documents/code/vuljector/vuljector-projects \
+  --exclude-dir ../vuljector-projects \
   --out scripts/selected_projects.json
 
 # exclude a previous selection JSON to produce a non-overlapping next batch

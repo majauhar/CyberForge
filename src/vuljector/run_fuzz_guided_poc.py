@@ -539,12 +539,18 @@ def batch_generate_guided_fuzz_poc(
     force_fuzzer: str | None = None,
     max_total_time: int = 90,
     limit: int | None = None,
+    skip: int = 0,
     exploit_timeout: int | None = 600,
     top_fuzzers: int = 1,
     use_curated_corpus: bool = True,
     register_curated_results: bool = True,
 ) -> dict[str, Any]:
+    # `skip` drops the first N sorted attempt dirs BEFORE `limit` is applied, so a prior
+    # pass run with `--limit K` (which processed sorted()[:K]) can be resumed with
+    # `--skip K` to cover exactly the un-processed tail without redoing the first K.
     raw_attempt_dirs = sorted(path for path in source_run_dir.glob("attempt_*") if path.is_dir())
+    if skip:
+        raw_attempt_dirs = raw_attempt_dirs[skip:]
     if limit is not None:
         raw_attempt_dirs = raw_attempt_dirs[:limit]
     if not raw_attempt_dirs:
@@ -786,7 +792,7 @@ def _export_guided_success_bundle(attempt_dir: Path, verification: dict[str, Any
         if (attempt_dir / "artifacts" / "vuln.patch").exists()
         else (source_injection.get("artifacts") or {}).get("patch_diff", "")
     )
-    (vuln_dir / "patch.diff").write_text(patch_diff, encoding="utf-8")
+    (vuln_dir / "inject_vulnerability.diff").write_text(patch_diff, encoding="utf-8")
     write_json(vuln_dir / "verification_result.json", verification)
     write_json(vuln_dir / "fuzz_poc_manifest.json", manifest)
     write_json(vuln_dir / "source_injection_result.json", source_injection)

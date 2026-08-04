@@ -45,25 +45,5 @@ packages = [
 dev = []
 
 # ── Notes ────────────────────────────────────────────────────────────────────
-#
-# Install (editable):
-#   uv pip install -e .
-#
-# Run the test script (no install needed — test_pipeline.py adds src/ to PYTHONPATH):
-#   uv run test_pipeline.py flask
-#
-# Run the CLI (requires install or PYTHONPATH=src):
-#   PYTHONPATH=src python -m vuljector.cli setup flask
-#
-# API keys go in src/.env (gitignored):
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   OPENAI_API_KEY=sk-...        # for openai/ models
-#   OPENAI_API_BASE=...          # for custom OpenAI-compatible endpoints
-#   RCHAT_OSS_API_BASE=...       # RCHAT proxy
-#   RCHAT_OSS_API_KEY=...
-#
-# OSS-Fuzz setup (required for container image builds):
-#   git clone https://github.com/google/oss-fuzz
-#   cd oss-fuzz && python3 infra/helper.py build_image <project>
-#   # ContainerRuntime will use docker build from project's setup/ dir.
-#   # For OSS-Fuzz projects, configure project.json with the pre-built image tag.
+# Install (editable):  uv pip install -e .
+# Run the CLI:         vuljector setup <project>   (API keys go in src/.env)

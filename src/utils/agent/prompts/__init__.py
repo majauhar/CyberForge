@@ -1,7 +1,5 @@
 """Prompt package exports."""
 
-from .cve_injection import CVE_INJECT_TASK
-from .cve_report import CVE_REPORT_TASK
 from .injection import (
     ATTACK_SCRIPT_TASK,
     FUZZER_VULN_INJECT_TASK,
@@ -29,8 +27,6 @@ __all__ = [
     "ATTACK_SCRIPT_TASK",
     "build_fuzz_execution_context_section",
     "build_fuzz_guidance_section",
-    "CVE_INJECT_TASK",
-    "CVE_REPORT_TASK",
     "FUZZER_VULN_INJECT_TASK",
     "INSTANCE_TEMPLATE",
     "SECBENCH_TASK_SYSTEM_TEMPLATE",

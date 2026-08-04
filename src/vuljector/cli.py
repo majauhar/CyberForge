@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from utils.paths import env_file, selection_run_dir
 from vuljector.core import build_runtime, load_project_config
 from vuljector.run_init import run_init
-from vuljector.run_cve_report import run_cve_report
 from vuljector.run_afl_smoke import run_afl_smoke
 from vuljector.run_fuzz_poc import (
     batch_generate_fuzz_poc,
@@ -67,7 +66,7 @@ def main() -> None:
     p_sel.add_argument("project")
     p_sel.add_argument("strategy_id")
     p_sel.add_argument("model_id", nargs="?", default=None,
-                       help="LiteLLM model ID (required for static_analysis, codeql, llm_explore; not needed for cve_select)")
+                       help="LiteLLM model ID (required for static_analysis, codeql, llm_explore)")
     p_sel.add_argument("--cwe-groups", default=None)
     p_sel.add_argument("--cwe-ids", default=None)
     p_sel.add_argument("--max-candidates", type=int, default=None,
@@ -77,7 +76,7 @@ def main() -> None:
     p_inj.add_argument("project")
     p_inj.add_argument("candidates_file")
     p_inj.add_argument("model_id", nargs="?", default=None,
-                       help="LiteLLM model ID (required for llm_inject/cve_inject)")
+                       help="LiteLLM model ID (required for llm_inject)")
     p_inj.add_argument("--num-vulnerabilities", type=int, default=1)
     p_inj.add_argument("--debug", action="store_true")
     p_inj.add_argument("--auto-fuzz-poc", action="store_true",
@@ -85,16 +84,11 @@ def main() -> None:
     p_inj.add_argument("--auto-fuzz-poc-exploit-timeout", type=int, default=600)
     p_inj.add_argument("--auto-fuzz-poc-max-total-time", type=int, default=90)
 
-    p_cve_sel = sub.add_parser("cve-selection", help="Discover and rank CVEs for a project")
-    p_cve_sel.add_argument("project")
-    p_cve_sel.add_argument("--max-cves", type=int, default=10,
-                            help="Maximum CVEs to fetch (default: 10)")
-
     p_run = sub.add_parser("run", help="Convenience wrapper: selection + injection (injection strategy auto-routes)")
     p_run.add_argument("project")
     p_run.add_argument("selection_strategy_id")
     p_run.add_argument("model_id", nargs="?", default=None,
-                       help="LiteLLM model ID (required unless selection_strategy_id is cve_select)")
+                       help="LiteLLM model ID (required)")
     p_run.add_argument("--cwe-groups", default=None)
     p_run.add_argument("--cwe-ids", default=None)
     p_run.add_argument("--max-candidates", type=int, default=None,
@@ -102,11 +96,6 @@ def main() -> None:
     p_run.add_argument("--num-vulnerabilities", type=int, default=1)
     p_run.add_argument("--debug", action="store_true")
 
-    p_cve = sub.add_parser("cve-report", help="Generate CVE report for an existing vulnerability")
-    p_cve.add_argument("project")
-    p_cve.add_argument("vulnerability_id", help="e.g. vulnerability_5")
-    p_cve.add_argument("model_id")
-    
     p_at = sub.add_parser("agent-task", help="Run swe-agent-mini on a synthetic vulnerability task")
     p_at.add_argument("project", help="Project name (must exist in vuljector-projects/)")
     p_at.add_argument("vulnerability_id", help="e.g. vulnerability_0")
@@ -243,6 +232,8 @@ def main() -> None:
     p_fgb.add_argument("--force-fuzzer", default=None)
     p_fgb.add_argument("--max-total-time", type=int, default=90)
     p_fgb.add_argument("--limit", type=int, default=None)
+    p_fgb.add_argument("--skip", type=int, default=0,
+                       help="Drop the first N sorted attempt dirs before --limit (resume past a prior --limit N pass)")
     p_fgb.add_argument("--exploit-timeout", type=int, default=600)
     p_fgb.add_argument("--top-fuzzers", type=int, default=1)
     p_fgb.add_argument("--no-curated-corpus", action="store_true")
@@ -273,19 +264,6 @@ def main() -> None:
     p_afl.add_argument("--seconds", type=int, default=15, help="How long AFL++ should fuzz before stopping")
 
     args = parser.parse_args()
-
-    if args.command == "cve-report":
-        try:
-            payload = run_cve_report(
-                project=args.project,
-                vulnerability_id=args.vulnerability_id,
-                model_id=args.model_id,
-            )
-        except Exception as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(payload, indent=2))
-        return
 
     if args.command == "report":
         from pathlib import Path
@@ -401,6 +379,7 @@ def main() -> None:
                 force_fuzzer=args.force_fuzzer,
                 max_total_time=args.max_total_time,
                 limit=args.limit,
+                skip=args.skip,
                 exploit_timeout=None if args.no_verify else args.exploit_timeout,
                 top_fuzzers=args.top_fuzzers,
                 use_curated_corpus=not args.no_curated_corpus,
@@ -463,8 +442,7 @@ def main() -> None:
         elif args.command == "setup":
             payload = run_setup(args.project, fuzzing_engine=args.fuzzing_engine)
         elif args.command == "selection":
-            # cve_select is programmatic; model_id not needed
-            if args.strategy_id != "cve_select" and not args.model_id:
+            if not args.model_id:
                 parser.error("model_id is required for fuzz_guided, static_analysis, codeql, and llm_explore strategies")
             payload = run_selection(
                 project=args.project,
@@ -512,8 +490,7 @@ def main() -> None:
 
 
 def _run_convenience(args: argparse.Namespace) -> dict:
-    # cve_select is programmatic; model_id not needed
-    if args.selection_strategy_id != "cve_select" and not args.model_id:
+    if not args.model_id:
         raise ValueError("model_id is required for fuzz_guided, static_analysis, codeql, and llm_explore strategies")
 
     config = load_project_config(args.project)

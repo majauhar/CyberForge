@@ -92,7 +92,7 @@ def run_agent_task(
 
         # ── Model + agent ─────────────────────────────────────────────────────
         model_name = _normalize_litellm_model_name(request.model_id)
-        model_kwargs: dict = {"drop_params": True}
+        model_kwargs: dict = {"drop_params": True, "temperature": float(__import__("os").environ.get("VULJECTOR_TEMP", "0.7"))}
         # Force tool use for custom/self-signed endpoints (e.g. vLLM-served models)
         # that don't default to tool calls without explicit tool_choice.
         if env.get("PYTHONHTTPSVERIFY") == "0":

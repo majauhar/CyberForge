@@ -377,7 +377,7 @@ def _materialize_bundle(candidate: dict[str, Any], bundles_dir: Path) -> Path:
     guided_attempt_dir = Path(candidate["guided_attempt_dir"])
     exploit_dir = guided_attempt_dir / "artifacts" / "exploit_files"
 
-    shutil.copy2(Path(candidate["vuln_patch_path"]), bundle_dir / "patch.diff")
+    shutil.copy2(Path(candidate["vuln_patch_path"]), bundle_dir / "inject_vulnerability.diff")
     shutil.copy2(exploit_dir / "fuzz_poc_manifest.json", bundle_dir / "fuzz_poc_manifest.json")
     for filename in ("exploit.sh", "fuzz_poc.py", "fuzz_poc_manifest.json", "attack.py"):
         src = exploit_dir / filename
@@ -565,7 +565,7 @@ def _build_spec(
 ) -> SyntheticTaskSpec:
     metadata = assets["metadata"]
     hints = dict(assets.get("hints") or {})
-    patch_diff = (bundle_dir / "patch.diff").read_text(encoding="utf-8")
+    patch_diff = (bundle_dir / "inject_vulnerability.diff").read_text(encoding="utf-8")
     affected_files = _affected_files_from_patch(patch_diff)
     reference_exploit_path = _resolve_reference_exploit(bundle_dir)
     teacher_assistance = {

@@ -108,7 +108,7 @@ def build_task_dataset_rows(
         "vulnerability_id": vulnerability_id,
         "work_dir": f"/src/{project}",
         "base_commit": metadata.get("secure_base_commit", ""),
-        "patch": (vuln_dir / "patch.diff").read_text(encoding="utf-8"),
+        "patch": (vuln_dir / "inject_vulnerability.diff").read_text(encoding="utf-8"),
         "bug_report": assets["bug_report"],
         "sanitizer_report": assets["sanitizer_report"],
         "hints": assets["hints"],
@@ -694,7 +694,7 @@ def _resolve_reference_exploit(vuln_dir: Path) -> Path:
 
 
 def _primary_affected_file(vuln_dir: Path) -> str:
-    patch_path = vuln_dir / "patch.diff"
+    patch_path = vuln_dir / "inject_vulnerability.diff"
     if not patch_path.exists():
         return ""
     for line in patch_path.read_text(encoding="utf-8").splitlines():

@@ -256,7 +256,7 @@ def _install_vulnerable_patch(runtime: ContainerRuntime, spec: SyntheticTaskSpec
     """Apply the stored vulnerable patch in the persistent container."""
     patch_diff = spec.patch_diff
     if not patch_diff.strip():
-        logger.warning("[%s] No patch.diff found for %s — container remains at secure baseline.", spec.project, spec.vulnerability_id)
+        logger.warning("[%s] No inject_vulnerability.diff found for %s — container remains at secure baseline.", spec.project, spec.vulnerability_id)
         return
     _apply_patch(runtime, repo_dir=runtime.repo_dir_in_container, patch_diff=patch_diff, label="vuln")
 

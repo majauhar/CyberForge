@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from setup.container_runtime import ContainerRuntime
 from setup.setup_test_harness.layout import harness_exec_command
+
+# Hard ceiling on a single unit-test harness run. Generous enough for any real
+# suite (these normally finish in seconds-to-minutes) but bounds a hanging suite
+# so the injection worker can move on instead of blocking forever. Tunable via env.
+_VERIFY_TIMEOUT_S = int(os.getenv("VULJECTOR_VERIFY_TIMEOUT", "900"))
 
 
 def run_unit_tests(
@@ -32,7 +38,13 @@ def run_unit_tests(
     if not parser_host.exists():
         raise RuntimeError(f"[{project_root}] Missing required {parser_host} (expected alongside unit_tests/test.sh).")
 
-    test_result = runtime.exec(harness_exec_command(), workdir=repo_dir)
+    test_result = runtime.exec(
+        harness_exec_command(timeout_s=_VERIFY_TIMEOUT_S),
+        workdir=repo_dir,
+        # Subprocess-level backstop in case `docker exec` itself wedges (daemon
+        # stall) before the in-container `timeout` fires.
+        timeout=_VERIFY_TIMEOUT_S + 120,
+    )
     raw_output = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
     passed_count = extract_passing_count(raw_output)
 

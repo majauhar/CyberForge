@@ -38,7 +38,9 @@ def compute_quality_metrics(trajectory_path: Path) -> dict[str, Any]:
     model_stats = info.get("model_stats") or {}
     messages: list[dict] = raw.get("messages") or []
 
-    exit_status: str = str(config.get("exit_status") or "")
+    # mini-swe-agent v2 stores exit_status on info (not info.config); older
+    # versions used info.config. Read info first, fall back to config.
+    exit_status: str = str(info.get("exit_status") or config.get("exit_status") or "")
     api_calls: int = int(model_stats.get("api_calls") or 0)
     instance_cost: float = float(model_stats.get("instance_cost") or 0.0)
 
@@ -51,7 +53,10 @@ def compute_quality_metrics(trajectory_path: Path) -> dict[str, Any]:
     # Count bash tool calls (proxy for how much the agent actually did)
     bash_command_count: int = _count_bash_commands(messages)
 
-    completed: bool = exit_status == "Completed"
+    # A clean agent-initiated submit is "Submitted" in mini-swe-agent v2.x
+    # (older/other harnesses used "Completed"). Hitting step/context limits
+    # (LimitsExceeded / ContextWindowExceededError) is NOT a clean completion.
+    completed: bool = exit_status in ("Submitted", "Completed")
 
     return {
         "exit_status": exit_status,

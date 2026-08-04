@@ -1,19 +1,16 @@
 """Maps injection_strategy_id -> InjectionStrategy implementation."""
 
 from injector.base import InjectionStrategy
-from injector.cve_inject.run import CVEInjectStrategy
 from injector.fuzzer_llm_inject.run import FuzzerLLMInjectStrategy
 from injector.llm_inject.run import LLMInjectStrategy
 
 INJECTOR_REGISTRY: dict[str, type[InjectionStrategy]] = {
     "llm_inject": LLMInjectStrategy,
     "fuzzer_llm_inject": FuzzerLLMInjectStrategy,
-    "cve_inject": CVEInjectStrategy,
 }
 
 # Maps selection_strategy_id -> injection_strategy_id
 _SELECTION_TO_INJECTION: dict[str, str] = {
-    "cve_select": "cve_inject",
     "llm_explore": "llm_inject",
     "static_analysis": "llm_inject",
     "fuzz_guided": "fuzzer_llm_inject",

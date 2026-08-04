@@ -6,7 +6,7 @@
 #
 # Defaults:
 #   --json     scripts/selected_projects.json
-#   --oss-fuzz /home/anl31/documents/code/vuljector/oss-fuzz
+#   --oss-fuzz ../oss-fuzz   (an oss-fuzz checkout beside the repo)
 #   --model    azure/gpt-5.4-mini
 #   --jobs     1   (sequential; set >1 for parallel — watch Docker memory)
 
@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 JSON_FILE="$REPO_ROOT/scripts/selected_projects.json"
-OSS_FUZZ_PATH="/home/anl31/documents/code/vuljector/oss-fuzz"
+OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$REPO_ROOT/../oss-fuzz}"
 MODEL_ID="azure/gpt-5.4-mini"
 JOBS=1
 

@@ -38,9 +38,9 @@ def load_vulnerability(
     if not metadata:
         raise FileNotFoundError(f"vulnerability_metadata.json missing in {vuln_dir}")
 
-    patch_diff = _load_text(vuln_dir / "patch.diff")
+    patch_diff = _load_text(vuln_dir / "inject_vulnerability.diff")
     if patch_diff is None:
-        raise FileNotFoundError(f"patch.diff missing in {vuln_dir}")
+        raise FileNotFoundError(f"inject_vulnerability.diff missing in {vuln_dir}")
 
     reference_exploit = _resolve_reference_exploit(vuln_dir)
     cwe_id = metadata.get("cwe_id", "CWE-UNKNOWN")

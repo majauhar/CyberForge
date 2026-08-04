@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -26,7 +27,7 @@ from utils.paths import project_root
 logger = logging.getLogger(__name__)
 
 # Agent budget for task runs — more generous than injection since the task is harder.
-_STEP_LIMIT = 30
+_STEP_LIMIT = int(os.environ.get("VULJECTOR_STEP_LIMIT", "30"))
 _COST_LIMIT = 3.0
 
 

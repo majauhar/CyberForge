@@ -199,7 +199,7 @@ def run_injection(
             _copy_exploit_files(attempt_dir, vuln_dir)
             patch_diff = (injection_result.artifacts or {}).get("patch_diff", "")
             if patch_diff:
-                (vuln_dir / "patch.diff").write_text(patch_diff, encoding="utf-8")
+                (vuln_dir / "inject_vulnerability.diff").write_text(patch_diff, encoding="utf-8")
             _write_vulnerability_metadata(
                 project=project,
                 vulnerability_id=vulnerability_id,
