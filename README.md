@@ -8,6 +8,11 @@ self-contained instance with the diff, metadata, and exploit artifacts needed to
 
 The installed CLI and Python package are named `vuljector`.
 
+## Related repositories
+
+- [**CyberForge-projects**](https://github.com/vuljector/CyberForge-projects) — the released dataset of injected, PoV-verified vulnerabilities (the `vuljector-projects/` layout this tool reads and writes).
+- [**CyberForge-training**](https://github.com/vuljector/CyberForge-training) — teacher-trajectory cleansing and Gemma-4 LoRA SFT code that consumes the trajectories produced by `teacher-collect`.
+
 ## Setup
 
 Prerequisites:
