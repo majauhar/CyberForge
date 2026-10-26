@@ -32,5 +32,5 @@ litellm_settings:
   drop_params: true          # tolerate params a given OpenRouter model doesn't accept
   request_timeout: 600       # security agents run long; don't cut them off
 
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY   # clients must send this as their API key
+# No general_settings/master_key: avoids litellm's DB (prisma) auth path.
+# This proxy is bound to localhost by start_proxy.sh; clients may send any bearer token.

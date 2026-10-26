@@ -40,7 +40,7 @@ Keep it running (tmux/screen or a systemd unit) while you run pilots.
 In `CyberForge/src/.env`:
 ```ini
 RCHAT_OSS_API_BASE=http://localhost:4000/v1
-RCHAT_OSS_API_KEY=<the same value as LITELLM_MASTER_KEY>
+RCHAT_OSS_API_KEY=any-nonempty-string   # proxy is keyless; value is ignored but must be non-empty
 ```
 Then pass a **bare alias** as the model id:
 ```bash
@@ -71,8 +71,11 @@ Use the proxy when you want stable aliases, central key/rate-limit/cost control,
 paper's bare-name scripts working.
 
 ## Troubleshooting (common T4 issues)
-- **`AuthenticationError` / 401 from proxy** — `src/.env` `RCHAT_OSS_API_KEY` must equal
-  `LITELLM_MASTER_KEY`.
+- **`ModuleNotFoundError: No module named 'prisma'`** — this build of litellm routes requests
+  through its DB-backed key auth when `master_key` is set. This config ships **keyless** (no
+  `general_settings`/`master_key`) to avoid that; don't re-add `master_key` unless you also install
+  and generate prisma.
+- **401 from proxy** — only if you re-enabled `master_key`; keyless needs no client key.
 - **`NotFoundError: model ... does not exist`** — the bare alias isn't in `config.yaml`
   `model_list`, or you passed a provider-prefixed id that bypassed the proxy. Check
   `curl /v1/models`.

@@ -11,9 +11,8 @@ set -euo pipefail
 cd "$(cd "$(dirname "$0")" && pwd)"
 
 : "${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY}"
-: "${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY (clients authenticate with this)}"
 PORT="${PORT:-4000}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 CONFIG="${CONFIG:-config.yaml}"
 
 # Prefer a dedicated venv at deploy/litellm/.proxyenv so the proxy's litellm
