@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(cd "$(dirname "$0")" && pwd)"
 
 : "${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY}"
+: "${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY (clients must send this exact value as their bearer token)}"
 PORT="${PORT:-4000}"
 HOST="${HOST:-127.0.0.1}"
 CONFIG="${CONFIG:-config.yaml}"

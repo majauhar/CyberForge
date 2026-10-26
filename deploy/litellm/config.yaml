@@ -32,5 +32,8 @@ litellm_settings:
   drop_params: true          # tolerate params a given OpenRouter model doesn't accept
   request_timeout: 600       # security agents run long; don't cut them off
 
-# No general_settings/master_key: avoids litellm's DB (prisma) auth path.
-# This proxy is bound to localhost by start_proxy.sh; clients may send any bearer token.
+general_settings:
+  # Clients must send this exact value as their bearer token.
+  # NOTE: a WRONG token (not this key) makes litellm attempt a DB key-lookup and
+  # fail with "No connected db"; send the real key and no DB is needed.
+  master_key: os.environ/LITELLM_MASTER_KEY
