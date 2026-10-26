@@ -1,0 +1,36 @@
+# LiteLLM proxy config for CyberForge, backed by OpenRouter (GLM 5.3).
+#
+# The proxy exposes an OpenAI-compatible endpoint (http://HOST:4000/v1). CyberForge
+# points at it via RCHAT_OSS_API_BASE / RCHAT_OSS_API_KEY in src/.env, and a BARE
+# model id passed to vuljector (e.g. `cyberforge-agent`) is normalized to
+# `openai/cyberforge-agent` and resolved here by `model_name`.
+#
+# `model_name`  = the alias you pass to vuljector (keep these stable).
+# `model`       = the real OpenRouter model slug (verify at https://openrouter.ai/models).
+
+model_list:
+  # Agent that performs injection / patch / PoV work (mini-swe-agent driver).
+  - model_name: cyberforge-agent
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # "Teacher" model used for teacher-collect trajectory generation.
+  - model_name: cyberforge-teacher
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Alias matching the paper's batch scripts (run_teacher_gen.sh uses
+  # `gemma-4-31b-base`). Kept so those scripts work unchanged.
+  - model_name: gemma-4-31b-base
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+litellm_settings:
+  drop_params: true          # tolerate params a given OpenRouter model doesn't accept
+  request_timeout: 600       # security agents run long; don't cut them off
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY   # clients must send this as their API key
