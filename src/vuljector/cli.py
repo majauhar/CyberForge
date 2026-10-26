@@ -499,6 +499,7 @@ def _run_convenience(args: argparse.Namespace) -> dict:
         run_setup(args.project)
     selection_payload = run_selection(
         project=args.project,
+        strategy_id=args.selection_strategy_id,
         model_id=args.model_id,
         cwe_groups=_split_csv(args.cwe_groups),
         cwe_ids=_split_csv(args.cwe_ids),
