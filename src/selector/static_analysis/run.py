@@ -15,6 +15,38 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Directory segments and filename markers that indicate NON-library code
+# (fuzz harnesses, tests, examples, vendored deps). Injecting there yields
+# unrealistic vulnerabilities in test scaffolding rather than real library
+# functions, so these are excluded from selection candidates by default.
+_EXCLUDE_DIR_SEGMENTS = {
+    "fuzz", "fuzzing", "fuzzer", "fuzzers", "ossfuzz", "oss-fuzz",
+    "test", "tests", "testing", "unittest", "unittests",
+    "example", "examples", "sample", "samples", "demo", "demos",
+    "bench", "benchmark", "benchmarks",
+    "doc", "docs", "third_party", "thirdparty", "external", "extern",
+    "vendor", "contrib", "deps",
+}
+_EXCLUDE_NAME_SUBSTRINGS = ("fuzz", "harness", "llvmfuzzer")
+
+
+def _is_excluded_source(path: str) -> bool:
+    """True if a candidate file is a fuzz harness / test / example (not library code)."""
+    p = (path or "").replace("\\", "/").lower()
+    if not p:
+        return False
+    parts = p.split("/")
+    if any(seg in _EXCLUDE_DIR_SEGMENTS for seg in parts[:-1]):
+        return True
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0]
+    if any(sub in name for sub in _EXCLUDE_NAME_SUBSTRINGS):
+        return True
+    if stem.startswith("test") or stem.endswith("test") or "_test" in stem or "test_" in stem:
+        return True
+    return False
+
+
 from selector.base import SelectionStrategy
 from setup.container_runtime import ContainerRuntime
 from vuljector.io_contracts import SelectionCandidate, SelectionResult, utc_now_iso
@@ -76,6 +108,25 @@ class StaticAnalysisStrategy(SelectionStrategy):
         )
 
         candidates = _map_candidates(pipeline_output.candidates)
+
+        # Exclude fuzz-harness / test / example files so injections land in real
+        # library source. Override with VULJECTOR_SELECTION_INCLUDE_HARNESS=1.
+        if os.environ.get("VULJECTOR_SELECTION_INCLUDE_HARNESS", "").lower() not in ("1", "true", "yes"):
+            filtered = [c for c in candidates if not _is_excluded_source(c.repo_path)]
+            dropped = len(candidates) - len(filtered)
+            if filtered:
+                if dropped:
+                    logger.info(
+                        "[%s] static_analysis: excluded %d harness/test/example candidates; %d library candidates remain",
+                        getattr(request, "project", "?"), dropped, len(filtered),
+                    )
+                candidates = filtered
+            elif candidates:
+                logger.warning(
+                    "[%s] static_analysis: harness/test filter removed ALL %d candidates; keeping unfiltered "
+                    "(set VULJECTOR_SELECTION_INCLUDE_HARNESS=1 to silence)",
+                    getattr(request, "project", "?"), len(candidates),
+                )
 
         # Apply CWE filters if requested.
         cwe_ids = set(filters.get("cwe_ids", []))
