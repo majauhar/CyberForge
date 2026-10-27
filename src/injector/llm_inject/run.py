@@ -449,7 +449,13 @@ class LLMInjectStrategy(InjectionStrategy):
         return VULN_ONLY_INJECT_TASK if _vuln_only_mode() else VULN_INJECT_TASK
 
     def build_language_context(self, candidate: SelectionCandidate, *, project: str, cwes_str: str, injection_hint: str) -> dict:
-        return _get_generic_language_context(
+        # Use the self-contained exploit profile (/tmp/exploit dir with a
+        # relocatable exploit.sh) rather than the legacy /tmp/attack.sh wrapper.
+        # The old generic context produced an exploit.sh calling an absolute
+        # /tmp/attack.sh path that doesn't exist in the fresh verification
+        # containers, so every injection failed verification with
+        # oracle_invalid_on_secure (infra_or_sanitizer_internal_error).
+        return _get_language_context(
             candidate.language or "python",
             project=project,
             cwes=cwes_str,
